@@ -7,7 +7,7 @@ import kotlinx.serialization.json.jsonObject
 
 /**
  * The whole API layer reads back-end payloads through these helpers, because local
- * servers deviate from the documented shape. The behaviour worth locking is the
+ * servers deviate from the documented shape. The behavior worth locking is the
  * tolerance itself: absent keys, JSON null (a JsonPrimitive singleton that prim()
  * rejects on purpose), and a number arriving where text or a number is expected.
  */

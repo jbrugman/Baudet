@@ -139,7 +139,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         }
         beginTurn(text)
 
-        // A fresh renderer per turn keeps the reasoning/answer labelling scoped to
+        // A fresh renderer per turn keeps the reasoning/answer labeling scoped to
         // this one stream; callbacks fire on the worker thread, completion on the EDT.
         val render = TurnRender()
         Thread {
@@ -195,7 +195,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * Turns the two response streams into transcript writes. Reasoning streams
      * ahead of the answer on this backend; both callbacks fire on the one worker
      * thread and invokeLater preserves submission order, so the first chunk of each
-     * kind is labelled exactly once.
+     * kind is labeled exactly once.
      */
     private inner class TurnRender {
         private var sawReasoning = false

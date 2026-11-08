@@ -7,7 +7,7 @@ import java.nio.file.Files
 import javax.imageio.ImageIO
 
 /**
- * The icon is drawn in code, so the behaviour worth locking is that it paints the
+ * The icon is drawn in code, so the behavior worth locking is that it paints the
  * mark at the sizes a window manager asks for, and keeps the muzzle as the lighter
  * band across the lower face -- the trait that separates a donkey from a round
  * mascot that reads as a rabbit.

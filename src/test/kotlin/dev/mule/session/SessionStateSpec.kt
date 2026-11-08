@@ -62,7 +62,7 @@ class SessionStateSpec : BehaviorSpec({
             mutableListOf(Msg("user", "q1"), Msg("assistant", "a1"))
         )
         `when`("rendering it for display") {
-            then("each turn is labelled by role and separated by a blank line") {
+            then("each turn is labeled by role and separated by a blank line") {
                 session.transcript() shouldBe "user: q1\n\nassistant: a1\n\n"
             }
             then("the summary is not folded in, only the kept turns show") {
