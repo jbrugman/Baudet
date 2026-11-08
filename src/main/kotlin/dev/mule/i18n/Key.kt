@@ -154,6 +154,18 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     OpenSessionButton("Open", "Open", "Ouvrir", "Öffnen"),
     ProjectChatStatus("new conversation in {0}", "nieuw gesprek in {0}", "nouvelle conversation dans {0}", "neue Unterhaltung in {0}"),
     InboxNode("Unassigned", "Niet toegewezen", "Non attribué", "Nicht zugewiesen"),
+    WarnNoFolder(
+        "This project has no folder linked, so the assistant cannot read or change files. Link a folder and grant Write access.",
+        "Aan dit project is geen map gekoppeld, dus de assistent kan geen bestanden lezen of wijzigen. Koppel een map en geef schrijfrechten.",
+        "Aucun dossier n’est associé à ce projet ; l’assistant ne peut ni lire ni modifier de fichiers. Associez un dossier et accordez les droits d’écriture.",
+        "Diesem Projekt ist kein Ordner zugeordnet, daher kann der Assistent keine Dateien lesen oder ändern. Ordnen Sie einen Ordner zu und erteilen Sie Schreibrechte."
+    ),
+    WarnNoWrite(
+        "The assistant cannot change files here: the project folder is read-only. Grant Write access to allow edits.",
+        "De assistent kan hier geen bestanden wijzigen: de projectmap is alleen-lezen. Geef schrijfrechten om aanpassingen toe te staan.",
+        "L’assistant ne peut pas modifier de fichiers ici : le dossier du projet est en lecture seule. Accordez les droits d’écriture pour autoriser les modifications.",
+        "Der Assistent kann hier keine Dateien ändern: Der Projektordner ist schreibgeschützt. Erteilen Sie Schreibrechte, um Änderungen zu erlauben."
+    ),
     ArchivedSuffix("archived", "gearchiveerd", "archivé", "archiviert"),
     FolderLabel("folder:", "map:", "dossier :", "Ordner:"),
     FolderNone("no folder linked", "geen map gekoppeld", "aucun dossier lié", "kein Ordner verknüpft"),

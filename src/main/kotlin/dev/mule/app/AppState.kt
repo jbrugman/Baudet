@@ -16,6 +16,7 @@ import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
 import dev.mule.tool.CallExtractor
 import dev.mule.tool.EditFileTool
+import dev.mule.tool.ReadFileTool
 import dev.mule.tool.LoopOutcome
 import dev.mule.tool.PromptedCallExtractor
 import dev.mule.tool.ResponsesTurnSource
@@ -151,16 +152,23 @@ class AppState(val store: H2Store) {
         session.projectId?.let { id -> projects().firstOrNull { it.id == id } }
 
     /**
-     * Whether a turn may enter the tool loop. Only when the user turned tools on
-     * *and* the conversation's project actually exposes a writable folder: a folder
-     * that is not linked, or is linked without the Write right, is a reason to stay
-     * on the plain path rather than to offer the model an edit it could never land.
+     * Why this turn can or cannot enter the tool loop, as one reason in a fixed
+     * precedence. Only [ToolGate.Active] sends a turn through the loop: the user must
+     * have tools on *and* the conversation's project must expose a linked folder with
+     * the Write right. The reasons are exposed, not collapsed to a boolean, so the UI
+     * can tell the user what to fix (link a folder, grant Write) instead of letting a
+     * request to edit fall silently onto the plain path.
      */
-    fun toolsActive(): Boolean {
-        if (config.toolMode == ToolMode.Off) return false
-        val project = currentProject() ?: return false
-        return !project.folderPath.isNullOrBlank() && project.isGranted(FolderPermission.Write)
+    fun toolGate(): ToolGate {
+        if (config.toolMode == ToolMode.Off) return ToolGate.Disabled
+        val project = currentProject() ?: return ToolGate.NoProject
+        if (project.folderPath.isNullOrBlank()) return ToolGate.NoFolder
+        if (!project.isGranted(FolderPermission.Write)) return ToolGate.NoWrite
+        return ToolGate.Active
     }
+
+    /** Whether a turn enters the loop; true exactly when [toolGate] is [ToolGate.Active]. */
+    fun toolsActive(): Boolean = toolGate() == ToolGate.Active
 
     /**
      * Blocking. Call off the EDT; both callbacks fire on that worker thread.
@@ -231,7 +239,7 @@ class AppState(val store: H2Store) {
         val system = config.resolvedSystemPrompt() + "\n\n" + CallExtractor.PROTOCOL
         val loop = ToolLoop(
             turnSource = ResponsesTurnSource(ResponsesClient(config), system),
-            registry = ToolRegistry(listOf(EditFileTool())),
+            registry = ToolRegistry(listOf(EditFileTool(), ReadFileTool())),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
             chainResponseId = config.useServerSession && session.previousResponseId != null

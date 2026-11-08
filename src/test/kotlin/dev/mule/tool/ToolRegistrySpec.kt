@@ -38,4 +38,15 @@ class ToolRegistrySpec : BehaviorSpec({
             }
         }
     }
+
+    given("a registry offering both file tools") {
+        val reg = ToolRegistry(listOf(EditFileTool(), ReadFileTool()))
+        `when`("rendering definitions") {
+            val json = reg.definitions()
+            then("both functions are offered to the backend") {
+                json.contains("edit_file") shouldBe true
+                json.contains("read_file") shouldBe true
+            }
+        }
+    }
 })

@@ -182,24 +182,36 @@ class AppStateSpec : BehaviorSpec({
         `when`("tools are off, even on a writable project") {
             val state = writableState(ToolMode.Off, read = true, write = true, link = true)
             then("the loop never activates") { state.toolsActive() shouldBe false }
+            then("the gate reports tools-off, not a missing folder or right") {
+                state.toolGate() shouldBe ToolGate.Disabled
+            }
         }
         `when`("ask is on over a project with the write right") {
             val state = writableState(ToolMode.Ask, read = true, write = true, link = true)
             then("the loop activates") { state.toolsActive() shouldBe true }
+            then("the gate reports it active") { state.toolGate() shouldBe ToolGate.Active }
         }
         `when`("the folder is linked read-only") {
             val state = writableState(ToolMode.Ask, read = true, write = false, link = true)
             then("the loop stays off") { state.toolsActive() shouldBe false }
+            then("the gate names the missing write right") { state.toolGate() shouldBe ToolGate.NoWrite }
         }
         `when`("the project has no linked folder") {
             val state = writableState(ToolMode.Auto, read = true, write = true, link = false)
             then("there is nothing to write into, so the loop stays off") {
                 state.toolsActive() shouldBe false
             }
+            then("the gate names the missing folder") { state.toolGate() shouldBe ToolGate.NoFolder }
         }
         `when`("auto is on over a writable project") {
             val state = writableState(ToolMode.Auto, read = true, write = true, link = true)
             then("the loop activates") { state.toolsActive() shouldBe true }
+            then("the gate reports it active") { state.toolGate() shouldBe ToolGate.Active }
+        }
+        `when`("the conversation belongs to no project") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(toolMode = ToolMode.Ask))
+            then("the gate names the missing project") { state.toolGate() shouldBe ToolGate.NoProject }
         }
     }
 })
