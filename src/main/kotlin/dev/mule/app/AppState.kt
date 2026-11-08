@@ -3,8 +3,10 @@ package dev.mule.app
 import dev.mule.api.ResponsesClient
 import dev.mule.api.Turn
 import dev.mule.config.AppConfig
+import dev.mule.config.ToolMode
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
+import dev.mule.project.FolderPermission
 import dev.mule.project.Project
 import dev.mule.session.Compactor
 import dev.mule.session.Msg
@@ -12,6 +14,14 @@ import dev.mule.session.SessionIds
 import dev.mule.session.SessionState
 import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
+import dev.mule.tool.CallExtractor
+import dev.mule.tool.EditFileTool
+import dev.mule.tool.LoopOutcome
+import dev.mule.tool.PromptedCallExtractor
+import dev.mule.tool.ResponsesTurnSource
+import dev.mule.tool.ToolContext
+import dev.mule.tool.ToolLoop
+import dev.mule.tool.ToolRegistry
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -51,6 +61,13 @@ class AppState(val store: H2Store) {
      * cannot absorb in place: the language, which needs the panels rebuilt.
      */
     var onConfigSaved: (AppConfig) -> Unit = {}
+
+    /**
+     * How a proposed file change gets approval in Ask mode. The UI installs a
+     * dialog here; default deny, so an unattended loop never writes on its own.
+     * Auto mode bypasses it, and the tool never calls it when tools are off.
+     */
+    var approveEdit: (relativePath: String, diff: String) -> Boolean = { _, _ -> false }
 
     fun saveConfig(next: AppConfig) {
         config = next
@@ -129,6 +146,22 @@ class AppState(val store: H2Store) {
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
 
+    /** The project the open conversation belongs to, or null when it is Unassigned. */
+    private fun currentProject(): Project? =
+        session.projectId?.let { id -> projects().firstOrNull { it.id == id } }
+
+    /**
+     * Whether a turn may enter the tool loop. Only when the user turned tools on
+     * *and* the conversation's project actually exposes a writable folder: a folder
+     * that is not linked, or is linked without the Write right, is a reason to stay
+     * on the plain path rather than to offer the model an edit it could never land.
+     */
+    fun toolsActive(): Boolean {
+        if (config.toolMode == ToolMode.Off) return false
+        val project = currentProject() ?: return false
+        return !project.folderPath.isNullOrBlank() && project.isGranted(FolderPermission.Write)
+    }
+
     /**
      * Blocking. Call off the EDT; both callbacks fire on that worker thread.
      *
@@ -142,25 +175,86 @@ class AppState(val store: H2Store) {
         onReasoning: (String) -> Unit = {}
     ): Turn {
         session.messages.add(Msg("user", userText))
-        val prev = if (config.useServerSession) session.previousResponseId else null
-        val turn: Turn
         try {
-            turn = ResponsesClient(config).turn(
-                system = config.resolvedSystemPrompt(),
-                history = session.promptHistory(),
-                userText = userText,
-                previousResponseId = prev,
-                onDelta = onDelta,
-                onReasoning = onReasoning
-            )
+            val turn = if (toolsActive()) runToolTurn(onDelta, onReasoning)
+            else runPlainTurn(userText, onDelta, onReasoning)
+            persist()
+            return turn
         } catch (e: Exception) {
-            session.messages.removeAt(session.messages.lastIndex) // do not keep a half-finished turn
+            // Neither path lands a partial reply, so the only new message is the prompt
+            // we just added: drop it rather than keep an unanswered turn on screen.
+            session.messages.removeAt(session.messages.lastIndex)
             throw e
         }
+    }
+
+    /** The one-shot reply this app had before tools: one Responses call, then done. */
+    private fun runPlainTurn(
+        userText: String,
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): Turn {
+        val prev = if (config.useServerSession) session.previousResponseId else null
+        val turn = ResponsesClient(config).turn(
+            system = config.resolvedSystemPrompt(),
+            history = session.promptHistory(),
+            userText = userText,
+            previousResponseId = prev,
+            onDelta = onDelta,
+            onReasoning = onReasoning
+        )
         session.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
         if (turn.responseId != null) session.previousResponseId = turn.responseId
-        persist()
         return turn
+    }
+
+    /**
+     * The tool-loop path. It replays the running transcript (the just-added prompt is
+     * last) and the loop feeds each tool observation back until the model stops asking
+     * or [AppConfig.maxToolIterations] cuts it off. Only the messages the loop appended
+     * fold into the session, so a failure before any write leaves the session holding
+     * just the prompt, which the caller's catch then drops.
+     */
+    private fun runToolTurn(
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): Turn {
+        val project = currentProject()
+            ?: error("runToolTurn invoked without a writable project") // toolsActive() has gated this
+        val context = ToolContext(
+            root = Paths.get(project.folderPath!!),
+            writeGranted = true,
+            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit
+        )
+        // The wire format is model-facing, so it joins the English system prompt only
+        // when tools are live; a plain or tool-less turn never mentions it.
+        val system = config.resolvedSystemPrompt() + "\n\n" + CallExtractor.PROTOCOL
+        val loop = ToolLoop(
+            turnSource = ResponsesTurnSource(ResponsesClient(config), system),
+            registry = ToolRegistry(listOf(EditFileTool())),
+            extractor = PromptedCallExtractor(),
+            maxIterations = config.maxToolIterations,
+            chainResponseId = config.useServerSession && session.previousResponseId != null
+        )
+        val outcome = loop.run(
+            history = session.promptHistory(),
+            previousResponseId = session.previousResponseId,
+            ctx = context,
+            onDelta = onDelta,
+            onReasoning = onReasoning
+        )
+        outcome.messages.forEach { session.messages.add(it) }
+        if (outcome.responseId != null) session.previousResponseId = outcome.responseId
+        return when (outcome) {
+            is LoopOutcome.Completed -> outcome.finalTurn
+            is LoopOutcome.CapReached -> Turn(
+                text = "",
+                responseId = outcome.responseId,
+                usage = null,
+                finalEvent = null,
+                incompleteReason = "max_tool_iterations"
+            )
+        }
     }
 
     fun compact(keepLast: Int, onDelta: (String) -> Unit): String? {

@@ -50,6 +50,7 @@ class ToolLoop(
                 steps.add(ToolStep(turn.text, emptyList(), emptyList()))
                 return LoopOutcome.Completed(
                     finalText = turn.text,
+                    finalTurn = turn,
                     responseId = turn.responseId,
                     steps = steps.toList(),
                     messages = added.toList(),

@@ -1,5 +1,6 @@
 package dev.mule.tool
 
+import dev.mule.api.Turn
 import dev.mule.session.Msg
 
 /**
@@ -23,6 +24,8 @@ sealed class LoopOutcome {
     /** The model gave a final answer with no further tool calls. */
     data class Completed(
         val finalText: String,
+        /** The reply that ended the run, kept whole so the caller keeps usage and the finish signal. */
+        val finalTurn: Turn,
         override val responseId: String?,
         override val steps: List<ToolStep>,
         override val messages: List<Msg>,

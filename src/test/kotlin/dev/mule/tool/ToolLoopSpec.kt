@@ -52,10 +52,26 @@ class ToolLoopSpec : BehaviorSpec({
                 (outcome is LoopOutcome.Completed) shouldBe true
                 (outcome as LoopOutcome.Completed).finalText shouldBe "nothing to do"
             }
+            then("it hands the caller the whole final Turn") {
+                val done = outcome as LoopOutcome.Completed
+                done.finalTurn.responseId shouldBe "r1"
+                done.finalTurn.incompleteReason shouldBe null
+            }
             then("it records one empty step and stores the assistant message") {
                 outcome.steps.size shouldBe 1
                 outcome.steps[0].calls.isEmpty() shouldBe true
                 outcome.messages.map { it.role } shouldBe listOf("assistant")
+            }
+        }
+    }
+
+    given("a final answer the backend truncated") {
+        val source = Scripted(listOf(Turn("ran out", "r9", null, null, incompleteReason = "max_output_tokens")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("running") {
+            val outcome = loop.run(seed("go"), ctx = ctx)
+            then("the completed outcome keeps that truncation on the final turn") {
+                (outcome as LoopOutcome.Completed).finalTurn.incompleteReason shouldBe "max_output_tokens"
             }
         }
     }

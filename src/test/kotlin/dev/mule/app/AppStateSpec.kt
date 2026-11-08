@@ -1,7 +1,10 @@
 package dev.mule.app
 
+import dev.mule.config.ToolMode
 import dev.mule.i18n.Language
 import dev.mule.i18n.Texts
+import dev.mule.project.FolderPermission
+import dev.mule.project.Permissions
 import dev.mule.session.Msg
 import dev.mule.store.H2Store
 import io.kotest.core.spec.style.BehaviorSpec
@@ -158,6 +161,45 @@ class AppStateSpec : BehaviorSpec({
             then("only the deleted conversation is gone from the list") {
                 state.sessionsIn(null).map { it.id } shouldBe listOf(cur.sessionId)
             }
+        }
+    }
+
+    given("the tool-loop gate") {
+        fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
+            val state = freshState()
+            val p = state.addProject("P")
+            if (link) {
+                val rights = buildSet {
+                    if (read) add(FolderPermission.Read)
+                    if (write) add(FolderPermission.Write)
+                }
+                state.linkFolder(p.id, "/tmp/mule-gate", Permissions.encode(rights))
+            }
+            state.startSessionIn(p.id)
+            state.saveConfig(state.config.copy(toolMode = mode))
+            return state
+        }
+        `when`("tools are off, even on a writable project") {
+            val state = writableState(ToolMode.Off, read = true, write = true, link = true)
+            then("the loop never activates") { state.toolsActive() shouldBe false }
+        }
+        `when`("ask is on over a project with the write right") {
+            val state = writableState(ToolMode.Ask, read = true, write = true, link = true)
+            then("the loop activates") { state.toolsActive() shouldBe true }
+        }
+        `when`("the folder is linked read-only") {
+            val state = writableState(ToolMode.Ask, read = true, write = false, link = true)
+            then("the loop stays off") { state.toolsActive() shouldBe false }
+        }
+        `when`("the project has no linked folder") {
+            val state = writableState(ToolMode.Auto, read = true, write = true, link = false)
+            then("there is nothing to write into, so the loop stays off") {
+                state.toolsActive() shouldBe false
+            }
+        }
+        `when`("auto is on over a writable project") {
+            val state = writableState(ToolMode.Auto, read = true, write = true, link = true)
+            then("the loop activates") { state.toolsActive() shouldBe true }
         }
     }
 })

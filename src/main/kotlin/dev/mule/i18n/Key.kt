@@ -103,6 +103,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Quand l'assistant peut utiliser des outils. Demander montre chaque modification pour approbation ; Auto écrit sans demander ; Off garde la boucle hors jeu.",
         "Wann der Assistent Werkzeuge nutzen darf. Fragen zeigt jede Änderung zur Freigabe; Auto schreibt ohne Nachfrage; Off lässt die Schleife außen vor."
     ),
+    EditReviewTitle("review change", "wijziging controleren", "vérifier la modification", "Änderung prüfen"),
+    EditReviewPrompt("allow Mule to write to {0}?", "Mule toestaan om {0} te schrijven?", "autoriser Mule à écrire dans {0} ?", "Mule erlauben, {0} zu schreiben?"),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
     ErrMaxTokens("max output tokens is not a positive number", "max output tokens is geen positief getal", "le nombre maximal de jetons de sortie n'est pas un nombre positif", "max. Ausgabetoken ist keine positive Zahl"),
