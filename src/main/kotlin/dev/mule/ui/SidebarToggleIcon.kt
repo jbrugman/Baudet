@@ -10,14 +10,16 @@ import javax.swing.Icon
 import javax.swing.UIManager
 
 /**
- * A "toggle sidebar" glyph: a rounded frame with a divider near its left edge, the
- * common convention for showing or hiding a side panel. It is drawn in the theme's
- * foreground color, so it reads correctly in both FlatLaf themes with no bundled SVG
- * and no resource path -- which matters for the later native-image build.
+ * A "toggle sidebar" glyph: a rounded frame with a divider near one edge, the common
+ * convention for showing or hiding a side panel; [rightSide] puts the rail on the right
+ * for a panel that lives on the right. It is drawn in the theme's foreground color, so it
+ * reads correctly in both FlatLaf themes with no bundled SVG and no resource path -- which
+ * matters for the later native-image build.
  */
 class SidebarToggleIcon(
     private val width: Int = 20,
-    private val height: Int = 18
+    private val height: Int = 18,
+    private val rightSide: Boolean = false
 ) : Icon {
 
     override fun getIconWidth(): Int = width
@@ -33,7 +35,8 @@ class SidebarToggleIcon(
             val w = width - 2
             val h = height - 2
             g2.drawRoundRect(x + 1, y + 1, w, h, 5, 5)
-            val rail = x + 1 + (w * 0.34).toInt() // the left rail that marks the sidebar
+            val frac = if (rightSide) 0.66 else 0.34 // the rail marks the panel it toggles
+            val rail = x + 1 + (w * frac).toInt()
             g2.drawLine(rail, y + 1, rail, y + 1 + h)
         } finally {
             g2.dispose()
