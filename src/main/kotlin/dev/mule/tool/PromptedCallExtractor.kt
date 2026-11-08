@@ -8,19 +8,37 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 /**
- * The prompted-JSON reader: it scans a reply for ```$FENCE``` fences and reads the
- * calls inside. A local model is given one strong, unmistakable marker rather than
- * being trusted to keep JSON out of prose, because those models emit stray braces
- * freely. Prose around the fences is ignored; a block that will not parse is skipped
- * rather than thrown, so one mangled call degrades to "no call" (the answer stands)
- * instead of failing the turn. Multiple fences and an array body are both accepted.
+ * Reads tool calls from a reply on two channels. Native calls the backend already
+ * returned (turn.functionCalls) come first and win; then the prompted reader scans for
+ * fenced blocks tagged with the marker so a model that answers in text instead of a
+ * native function_call still acts. A local model is given one strong marker rather than
+ * being trusted to keep JSON out of prose, because those models emit stray braces freely.
+ * Prose around fences is ignored and a block that will not parse is skipped, not thrown,
+ * so one mangled call degrades to "no call" (the answer stands) instead of failing the
+ * turn. Native argument strings that will not parse become an empty argument object, so
+ * the tool reports the missing fields back to the model rather than crashing.
  */
 class PromptedCallExtractor : CallExtractor {
 
-    private val fence = Regex("```" + CallExtractor.FENCE + "[ \\t]*\\n(.*?)```", RegexOption.DOT_MATCHES_ALL)
+    /** Three grave accents, built from a code point so the source never holds the run. */
+    private val fenceChars = "\u0060\u0060\u0060"
 
-    override fun extract(turn: Turn): List<ToolCall> =
-        fence.findAll(turn.text).flatMap { match -> parseBlock(match.groupValues[1]) }.toList()
+    private val fence = Regex(fenceChars + CallExtractor.FENCE + "[ \\t]*\\n(.*?)" + fenceChars,
+        RegexOption.DOT_MATCHES_ALL)
+
+    override fun extract(turn: Turn): List<ToolCall> {
+        val native = turn.functionCalls.mapIndexed { i, call ->
+            ToolCall(call.name, parseArguments(call.arguments), call.callId ?: "native-$i")
+        }
+        val prompted = fence.findAll(turn.text).flatMap { parseBlock(it.groupValues[1]) }.toList()
+        return native + prompted
+    }
+
+    private fun parseArguments(raw: String): JsonObject = try {
+        json.parseToJsonElement(raw.trim()) as? JsonObject ?: JsonObject(emptyMap())
+    } catch (_: Exception) {
+        JsonObject(emptyMap())
+    }
 
     private fun parseBlock(body: String): List<ToolCall> = try {
         when (val element = json.parseToJsonElement(body.trim())) {

@@ -17,16 +17,22 @@ interface CallExtractor {
         const val FENCE: String = "mule-tool"
 
         /**
-         * The instructions that define the wire format. Kept beside the parser on
-         * purpose: the prompt and the extractor that reads it live in one place, so
-         * the contract they share cannot drift apart between slices.
+         * The instructions that define the prompted wire format. Kept beside the parser
+         * on purpose: the prompt and the extractor that reads it live in one place, so
+         * the contract they share cannot drift apart between slices. English always, and
+         * strict: a chat-tuned model that is merely invited to use a format will invent
+         * its own, so this says exactly the one shape accepted and forbids any other.
          */
         val PROTOCOL: String = """
-            When you want to change a file, do not print a patch in prose. Instead emit a
-            fenced block tagged $FENCE whose body is one JSON object, or a JSON array of them:
+            You may change files only through the edit_file tool, and only with the exact
+            format below. Do not describe a patch in prose, and never use any other tool
+            syntax or markup. To change a file, emit one fenced block tagged $FENCE that
+            contains a single JSON object:
               {"tool": "edit_file", "arguments": {"file": "relative/path", "edits": [{"old_text": "...", "new_text": "..."}]}}
-            Put that block on its own, any prose before or after it. After the result of each
-            call is returned to you, decide the next step: call again, or answer without a block.
+            Prose may come before or after the block. Each call returns an observation that
+            says ok true or ok false; read it before acting again. On ok false, do not send
+            the same call again unchanged; fix the arguments or answer without a block. On
+            ok true, either answer or make the next call you still need.
         """.trimIndent()
     }
 }

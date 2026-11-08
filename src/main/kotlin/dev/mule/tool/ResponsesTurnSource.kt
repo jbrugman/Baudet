@@ -5,12 +5,12 @@ import dev.mule.api.Turn
 import dev.mule.session.Msg
 
 /**
- * Turns a running transcript into one Responses API call. The last message is the
- * current input and the rest is history, which is exactly the shape ResponsesClient
- * already takes; how much of that history the backend re-reads is the caller's
- * choice, carried by [previousResponseId] -- set it to replay from the client, leave
- * it null to lean on a stored session. It streams deltas and reasoning straight
- * through, so a tool loop looks like one continuous reply to the reader.
+ * Turns a running transcript into one Responses API call. [Transcript] decides what is
+ * replayed and what is the current input, and scrubs leakage on the way; how much the
+ * backend re-reads is the caller's choice, carried by [previousResponseId]. [tools]
+ * offers the enabled functions natively so a chat-tuned model can answer with a real
+ * function_call. Deltas and reasoning stream straight through, so a tool loop reads as
+ * one continuous reply.
  */
 class ResponsesTurnSource(
     private val client: ResponsesClient,
@@ -20,11 +20,11 @@ class ResponsesTurnSource(
     override fun nextTurn(
         history: List<Msg>,
         previousResponseId: String?,
+        tools: String?,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
-        val userText = history.lastOrNull()?.content ?: ""
-        val prior = if (history.isEmpty()) emptyList() else history.dropLast(1)
-        return client.turn(system, prior, userText, previousResponseId, onDelta, onReasoning)
+        val (prior, userText) = Transcript.forCall(history)
+        return client.turn(system, prior, userText, previousResponseId, tools, onDelta, onReasoning)
     }
 }

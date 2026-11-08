@@ -1,5 +1,6 @@
 package dev.mule.tool
 
+import dev.mule.api.FunctionCall
 import dev.mule.api.Turn
 import dev.mule.session.Msg
 import io.kotest.core.spec.style.BehaviorSpec
@@ -34,13 +35,13 @@ class ToolLoopSpec : BehaviorSpec({
     class Scripted(private val replies: List<Turn>) : TurnSource {
         var i = 0
         val seen = mutableListOf<List<Msg>>()
-        override fun nextTurn(history: List<Msg>, previousResponseId: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn {
+        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn {
             seen.add(history.toList())
             return replies[i.coerceAtMost(replies.lastIndex)].also { i++ }
         }
     }
     class AlwaysCall(private val reply: Turn) : TurnSource {
-        override fun nextTurn(history: List<Msg>, previousResponseId: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn = reply
+        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn = reply
     }
 
     given("a model that answers without calling a tool") {
@@ -120,6 +121,35 @@ class ToolLoopSpec : BehaviorSpec({
                 (outcome as LoopOutcome.Completed).finalText shouldBe "recovered"
                 outcome.steps[0].results[0].ok shouldBe false
                 (outcome.messages[1].content.contains("no tool named")) shouldBe true
+            }
+        }
+    }
+
+    given("a native function call the backend already returned") {
+        val callTurn = Turn("working", "r1", null, null,
+            functionCalls = listOf(FunctionCall("call_1", "noop", "{}")))
+        val source = Scripted(listOf(callTurn, turn("all done", "r2")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("running") {
+            val outcome = loop.run(seed("go"), ctx = ctx)
+            then("the native call runs and its observation names the call id") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                (outcome as LoopOutcome.Completed).finalText shouldBe "all done"
+                (outcome.messages[1].content.contains("call_1")) shouldBe true
+                (outcome.messages[1].content.contains("succeeded")) shouldBe true
+            }
+        }
+    }
+
+    given("a model that only answers after the iteration cap") {
+        val source = Scripted(listOf(turn(callText("noop"), "r1"), turn("settled", "r2")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 1)
+        `when`("running") {
+            val outcome = loop.run(seed("go"), ctx = ctx)
+            then("the answer still lands but the outcome flags the cap") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                (outcome as LoopOutcome.Completed).finalText shouldBe "settled"
+                outcome.capReached shouldBe true
             }
         }
     }

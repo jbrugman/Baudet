@@ -1,5 +1,6 @@
 package dev.mule.tool
 
+import dev.mule.api.FunctionCall
 import dev.mule.api.Turn
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
@@ -64,4 +65,37 @@ class PromptedCallExtractorSpec : BehaviorSpec({
             then("it skips the bad block instead of failing") { calls.isEmpty() shouldBe true }
         }
     }
+
+    given("a native function call with no fence") {
+        val native = Turn(
+            "thinking", "r", null, null,
+            functionCalls = listOf(FunctionCall("call_9", "edit_file", "{\"file\":\"a.txt\"}"))
+        )
+        `when`("extracting") {
+            val calls = extractor.extract(native)
+            then("it reads the native call with id, name and parsed arguments") {
+                calls.size shouldBe 1
+                calls[0].tool shouldBe "edit_file"
+                calls[0].callId shouldBe "call_9"
+                (calls[0].arguments.containsKey("file")) shouldBe true
+            }
+        }
+    }
+
+    given("a native call and a prompted block in one turn") {
+        val tick = "\u0060\u0060\u0060"
+        val text = tick + "mule-tool\n" +
+            "{\"tool\":\"edit_file\",\"arguments\":{\"file\":\"b.txt\"}}\n" + tick
+        val both = Turn(
+            text, "r", null, null,
+            functionCalls = listOf(FunctionCall("call_9", "native_tool", "{}"))
+        )
+        `when`("extracting") {
+            val calls = extractor.extract(both)
+            then("it lists the native call first and the prompted block after") {
+                calls.map { it.tool } shouldBe listOf("native_tool", "edit_file")
+            }
+        }
+    }
+
 })
