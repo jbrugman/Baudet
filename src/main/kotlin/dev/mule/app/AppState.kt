@@ -38,10 +38,17 @@ class AppState(val store: H2Store) {
     /**
      * True while a turn runs against the session it captured. Session switchers refuse to
      * move the field while this holds, so a reply never lands in a conversation the user
-     * switched to mid-stream. Public so a test can hold it; the UI never sets it.
+     * switched to mid-stream. Backed by an AtomicBoolean so [send] and [compact] claim it
+     * atomically and a second concurrent turn is rejected; the setter stays public so a test
+     * can hold the flag, while the UI leaves the actual claim to those two methods.
      */
-    @Volatile
-    var turning = false
+    private val turnLock = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    var turning: Boolean
+        get() = turnLock.get()
+        set(value) {
+            turnLock.set(value)
+        }
 
     /** The project a new chat is created under; set when one is selected in the sidebar. */
     var currentProjectId: String? = null
@@ -215,7 +222,9 @@ class AppState(val store: H2Store) {
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {}
     ): Turn {
-        turning = true
+        if (!turnLock.compareAndSet(false, true)) {
+            throw IllegalStateException("a turn is already running")
+        }
         val s = session
         s.messages.add(Msg("user", userText))
         val afterPrompt = s.messages.size
@@ -230,10 +239,16 @@ class AppState(val store: H2Store) {
             // have appended real actions through the sink; those stay, because losing a
             // recorded edit whose file changed on disk is worse than an unanswered turn.
             if (s.messages.size == afterPrompt) s.messages.removeAt(s.messages.lastIndex)
-            else persistTo(s)
+            else {
+                // Real actions already ran and are retained, but the server session was never
+                // told about them: its response id predates this turn. Drop the id so the next
+                // turn replays the whole transcript client-side and cannot miss the edit.
+                s.previousResponseId = null
+                persistTo(s)
+            }
             throw e
         } finally {
-            turning = false
+            turnLock.set(false)
         }
     }
 
@@ -316,13 +331,15 @@ class AppState(val store: H2Store) {
     }
 
     fun compact(keepLast: Int, onDelta: (String) -> Unit): String? {
-        turning = true
+        if (!turnLock.compareAndSet(false, true)) {
+            throw IllegalStateException("a turn is already running")
+        }
         try {
             val s = Compactor(config).compact(session, keepLast, onDelta)
             persist()
             return s
         } finally {
-            turning = false
+            turnLock.set(false)
         }
     }
 

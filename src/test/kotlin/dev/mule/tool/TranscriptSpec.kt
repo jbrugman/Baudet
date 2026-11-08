@@ -45,4 +45,25 @@ class TranscriptSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a tool turn that appended two observations after one answer") {
+        val history = listOf(
+            Msg("user", "the prompt"),
+            Msg("assistant", "first answer"),
+            Msg("user", "observation one"),
+            Msg("user", "observation two")
+        )
+        `when`("choosing the current input under a server session") {
+            val current = Transcript.currentInput(history, underServerSession = true)
+            then("both new observations reach the backend, not only the last") {
+                (current.contains("observation one")) shouldBe true
+                (current.contains("observation two")) shouldBe true
+            }
+        }
+        `when`("choosing the current input without a server session") {
+            then("only the newest message is the input, since the rest replays") {
+                Transcript.currentInput(history, underServerSession = false) shouldBe "observation two"
+            }
+        }
+    }
 })

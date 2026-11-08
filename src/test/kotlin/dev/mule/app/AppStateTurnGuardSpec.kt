@@ -47,4 +47,16 @@ class AppStateTurnGuardSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a turn that is already running") {
+        val state = freshState()
+        state.newSession()
+        state.turning = true
+        `when`("a second send is attempted") {
+            val thrown = runCatching { state.send("again", onDelta = {}) }.exceptionOrNull()
+            then("it is rejected centrally before touching the backend") {
+                (thrown is IllegalStateException) shouldBe true
+            }
+        }
+    }
 })
