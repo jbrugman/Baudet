@@ -25,7 +25,7 @@ tokens, a reliable tool caller, and a provider that tells the truth about
 what it did.
 
 Local-first here means **removing those assumptions**, and that shows up as
-concrete behaviour:
+concrete behavior:
 
 - **Honest token accounting.** `response_id`, prompt/completion tokens and the
   finish reason are always on screen, because they are the only evidence of
@@ -97,7 +97,11 @@ java -jar target/mule-<version>.jar                   # the app
 java -jar target/mule-<version>.jar --smoke           # headless model-list check
 ```
 
-Data lives in `./mule-data/mule.mv.db`; override with `-Dmule.home=/some/dir`.
+The store location defaults to a per-user directory that does not depend on the
+working directory -- `~/Library/Application Support/Mule` on macOS, `%APPDATA%\Mule`
+on Windows, `$XDG_DATA_HOME/mule` on Linux -- so the packaged app still finds it
+writable when Finder launches it with cwd `/`. Override with `-Dmule.home=/some/dir`;
+`mvn exec:java` pins it to `./mule-data` so a dev run keeps its store checkout-local.
 
 ## Packaging (macOS)
 
@@ -119,12 +123,50 @@ the bundle is built with a placeholder version and the real pre-alpha version
 (currently `0.1.0`) is written back into `Info.plist`. The shipped `.app`
 therefore reports `0.1.0` in Finder, not the placeholder it was built from.
 
-The bundle is **unsigned**: a copy downloaded from another machine is blocked by
-Gatekeeper until it is codesigned and notarized with an Apple Developer ID,
-which is not part of this build. What was verified here: the bundle builds, its
-`Info.plist` carries `0.1.0`, and its launcher boots the bundled runtime and
-runs the app (exercised through `--export-icons`, which needs no window). The
-graphical window itself opens on a real desktop session.
+The bundle is **ad-hoc signed** but carries no Apple Developer ID, so a copy
+downloaded from another machine is blocked by Gatekeeper until it is re-signed with
+a Developer ID and notarized -- a separate step that is not part of this build.
+
+Two things about launching it on Apple Silicon were learned the hard way, both
+specific to the Finder/`open` path (running the jar directly dodges them):
+
+- **The signature seal.** `jpackage` ad-hoc signs the bundle, then this build
+  stamps the real pre-alpha version into `Info.plist`. Editing a signed bundle
+  invalidates its seal (`invalid Info.plist: plist or signature have been
+  modified`), and a bundle with a broken seal aborts during GUI startup in
+  `-[NSApplicationAWT registerWithProcessManager]` before any window appears. The
+  build re-signs ad-hoc after the stamp and asserts the seal with
+  `codesign --verify`, so this cannot regress silently.
+- **The working directory.** Finder launches the app with cwd `/`, where the store
+  path once resolved to the read-only root and the JVM exited on startup. The data
+  directory is now an absolute per-user path (see *Build and run*), so the store
+  opens however the app is launched.
+
+What is measured here: the bundle builds, `Info.plist` carries `0.1.0`, and
+`codesign --verify` passes on the re-signed bundle; forcing cwd `/` reproduced the
+store-open failure and clears it after the fix. The graphical window opening on a
+real desktop session is the last step and has not been captured headlessly.
+
+### Launching the packaged app
+
+Two ways to start `Mule.app` from a shell:
+
+```bash
+open target/dist/Mule.app                     # normal launch (LaunchServices: Dock, icon)
+target/dist/Mule.app/Contents/MacOS/Mule      # direct: stdout/stderr and exit code stay in the shell
+```
+
+`open` is the double-click path; app output does not appear in the terminal.
+Arguments go through `--args`, e.g. `open target/dist/Mule.app --args --smoke`.
+The direct launcher boots the bundled runtime under `Contents/app`, so no local
+`java` or `JAVA_HOME` is needed -- handy for a headless run such as
+`target/dist/Mule.app/Contents/MacOS/Mule --export-icons=/tmp/mule-icons`.
+
+The bundle is ad-hoc signed (see above). Built on the machine that runs it, jpackage
+applies an ad-hoc signature and it launches normally; a copy carried from another
+machine is quarantined by Gatekeeper until cleared with
+`xattr -dr com.apple.quarantine target/dist/Mule.app`, or opened once with
+right-click -> Open in Finder.
 
 ## Continuous integration
 
@@ -136,7 +178,7 @@ GitHub Actions, in `.github/workflows/`:
   `mac-app` packaging, and upload the resulting `Mule.app` as a build artifact.
   The artifact is unsigned; downloading it and opening it locally is on you.
 
-## Measured behaviour
+## Measured behavior
 
 Recorded against oMLX serving `Qwen3.8-Flash-Next-oQ4e-mtp`, 2026-11-08:
 
@@ -157,7 +199,7 @@ the local model **Qwen3.8-Flash-Next-oQ4e-mtp** served by oMLX, under human
 direction and review. Per-line attribution is not available, so this is stated
 at project level rather than per file.
 
-Claims labelled "Measured" or "verified" above were obtained by running against
+Claims labeled "Measured" or "verified" above were obtained by running against
 the backend, not inferred from documentation — including one initial diagnosis
 that turned out to be wrong and was corrected by the probe output.
 
