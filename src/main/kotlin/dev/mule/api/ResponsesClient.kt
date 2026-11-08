@@ -2,6 +2,7 @@ package dev.mule.api
 
 import dev.mule.config.AppConfig
 import dev.mule.session.Msg
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -20,9 +21,10 @@ class ResponsesClient(private val cfg: AppConfig) {
         history: List<Msg>,
         userText: String,
         previousResponseId: String?,
+        tools: String? = null,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {}
-    ): Turn = call(buildRequest(system, history, userText, previousResponseId), onDelta, onReasoning)
+    ): Turn = call(buildRequest(system, history, userText, previousResponseId, tools), onDelta, onReasoning)
 
     /** One-off call that is not stored. Used by the compactor. */
     fun completeOnce(system: String, userText: String, maxTokens: Int, onDelta: (String) -> Unit): Turn {
@@ -40,11 +42,12 @@ class ResponsesClient(private val cfg: AppConfig) {
         return call(body, onDelta)
     }
 
-    private fun buildRequest(
+    internal fun buildRequest(
         system: String,
         history: List<Msg>,
         userText: String,
-        previousResponseId: String?
+        previousResponseId: String?,
+        tools: String?
     ): JsonObject = buildJsonObject {
         put("model", cfg.model)
         if (system.isNotBlank()) put("instructions", system)
@@ -55,6 +58,12 @@ class ResponsesClient(private val cfg: AppConfig) {
         cfg.topP?.let { put("top_p", it) }
         cfg.reasoningEffort?.takeIf { it.isNotBlank() }?.let { e ->
             put("reasoning", buildJsonObject { put("effort", e) })
+        }
+        // Offer the enabled tools as native functions so a chat-tuned model can answer
+        // with a function_call instead of a text protocol it may not follow. A tools
+        // string that will not parse as an array is skipped rather than sent half-formed.
+        tools?.let { t ->
+            (json.parseToJsonElement(t) as? JsonArray)?.let { put("tools", it) }
         }
         if (previousResponseId != null) put("previous_response_id", previousResponseId)
         put("input", buildJsonArray {

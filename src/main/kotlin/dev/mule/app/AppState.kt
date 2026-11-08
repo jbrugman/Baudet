@@ -3,8 +3,10 @@ package dev.mule.app
 import dev.mule.api.ResponsesClient
 import dev.mule.api.Turn
 import dev.mule.config.AppConfig
+import dev.mule.config.ToolMode
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
+import dev.mule.project.FolderPermission
 import dev.mule.project.Project
 import dev.mule.session.Compactor
 import dev.mule.session.Msg
@@ -12,6 +14,15 @@ import dev.mule.session.SessionIds
 import dev.mule.session.SessionState
 import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
+import dev.mule.tool.CallExtractor
+import dev.mule.tool.EditFileTool
+import dev.mule.tool.ReadFileTool
+import dev.mule.tool.LoopOutcome
+import dev.mule.tool.PromptedCallExtractor
+import dev.mule.tool.ResponsesTurnSource
+import dev.mule.tool.ToolContext
+import dev.mule.tool.ToolLoop
+import dev.mule.tool.ToolRegistry
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -23,6 +34,14 @@ class AppState(val store: H2Store) {
 
     var config: AppConfig = store.load() ?: AppConfig()
     var session: SessionState = SessionState(SessionIds.new(), config.model, null)
+
+    /**
+     * True while a turn runs against the session it captured. Session switchers refuse to
+     * move the field while this holds, so a reply never lands in a conversation the user
+     * switched to mid-stream. Public so a test can hold it; the UI never sets it.
+     */
+    @Volatile
+    var turning = false
 
     /** The project a new chat is created under; set when one is selected in the sidebar. */
     var currentProjectId: String? = null
@@ -43,6 +62,7 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = msgs.toMutableList()
         )
+        session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
     }
 
@@ -51,6 +71,13 @@ class AppState(val store: H2Store) {
      * cannot absorb in place: the language, which needs the panels rebuilt.
      */
     var onConfigSaved: (AppConfig) -> Unit = {}
+
+    /**
+     * How a proposed file change gets approval in Ask mode. The UI installs a
+     * dialog here; default deny, so an unattended loop never writes on its own.
+     * Auto mode bypasses it, and the tool never calls it when tools are off.
+     */
+    var approveEdit: (relativePath: String, diff: String) -> Boolean = { _, _ -> false }
 
     fun saveConfig(next: AppConfig) {
         config = next
@@ -65,6 +92,7 @@ class AppState(val store: H2Store) {
 
     /** Start a new conversation under a specific project; null places it in Unassigned. */
     fun newSession(projectId: String?): SessionState {
+        if (turning) return session
         session = SessionState(SessionIds.new(), config.model, null)
         session.projectId = projectId
         store.upsertSession(session.sessionId, session.model, null, 0, projectId)
@@ -77,6 +105,7 @@ class AppState(val store: H2Store) {
      * never litters the tree with abandoned empty sessions.
      */
     fun startSessionIn(projectId: String?): SessionState {
+        if (turning) return session
         session = SessionState(SessionIds.new(), config.model, null)
         session.projectId = projectId
         return session
@@ -87,12 +116,14 @@ class AppState(val store: H2Store) {
      * New session continues in the same place as the one just opened.
      */
     fun loadSession(id: String) {
+        if (turning) return
         session = SessionState(
             sessionId = id,
             model = store.model(id) ?: config.model,
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
+        session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
         currentProjectId = session.projectId
     }
@@ -108,6 +139,7 @@ class AppState(val store: H2Store) {
 
     /** Delete a project and every conversation inside it; files on disk are never touched. */
     fun deleteProject(id: String) {
+        if (turning) return
         val openWasInside = session.projectId == id
         store.deleteProject(id)
         if (currentProjectId == id) currentProjectId = null
@@ -118,6 +150,7 @@ class AppState(val store: H2Store) {
 
     /** Delete one conversation; if it is the open one, a fresh conversation takes its place. */
     fun deleteSession(id: String) {
+        if (turning) return
         val openWasIt = session.sessionId == id
         store.deleteSession(id)
         if (openWasIt) session = SessionState(SessionIds.new(), config.model, null)
@@ -128,6 +161,47 @@ class AppState(val store: H2Store) {
 
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
+
+    /** The project the given conversation belongs to, or null when it is Unassigned. */
+    private fun currentProject(s: SessionState): Project? =
+        s.projectId?.let { id -> projects().firstOrNull { it.id == id } }
+
+    /**
+     * Why this turn can or cannot enter the tool loop, as one reason in a fixed
+     * precedence. Only [ToolGate.Active] sends a turn through the loop: the user must
+     * have tools on *and* the conversation's project must expose a linked folder with
+     * the Write right. The reasons are exposed, not collapsed to a boolean, so the UI
+     * can tell the user what to fix (link a folder, grant Write) instead of letting a
+     * request to edit fall silently onto the plain path.
+     */
+    fun toolGate(): ToolGate = toolGate(session)
+
+    /** Same gate, evaluated against one session so a running turn reads the one it began with. */
+    private fun toolGate(s: SessionState): ToolGate {
+        if (config.toolMode == ToolMode.Off) return ToolGate.Disabled
+        val project = currentProject(s) ?: return ToolGate.NoProject
+        if (project.folderPath.isNullOrBlank()) return ToolGate.NoFolder
+        if (!project.isGranted(FolderPermission.Write)) return ToolGate.NoWrite
+        return ToolGate.Active
+    }
+
+    /**
+     * System instructions for one session: the resolved prompt with the compaction summary
+     * folded in. The summary rides here rather than as a replayed system message because
+     * the request builder drops system messages, which would silently lose it after a
+     * compaction. Model-facing, so English whatever the UI language is.
+     */
+    private fun instructionsFor(s: SessionState): String {
+        val summary = s.summary
+        val base = config.resolvedSystemPrompt()
+        return if (summary == null) base
+        else base + "\n\nSummary of the earlier conversation:\n" + summary
+    }
+
+    /** Whether a turn enters the loop; true exactly when [toolGate] is [ToolGate.Active]. */
+    fun toolsActive(): Boolean = toolGate() == ToolGate.Active
+
+    private fun toolsActive(s: SessionState): Boolean = toolGate(s) == ToolGate.Active
 
     /**
      * Blocking. Call off the EDT; both callbacks fire on that worker thread.
@@ -141,38 +215,128 @@ class AppState(val store: H2Store) {
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {}
     ): Turn {
-        session.messages.add(Msg("user", userText))
-        val prev = if (config.useServerSession) session.previousResponseId else null
-        val turn: Turn
+        turning = true
+        val s = session
+        s.messages.add(Msg("user", userText))
+        val afterPrompt = s.messages.size
         try {
-            turn = ResponsesClient(config).turn(
-                system = config.resolvedSystemPrompt(),
-                history = session.promptHistory(),
-                userText = userText,
-                previousResponseId = prev,
-                onDelta = onDelta,
-                onReasoning = onReasoning
-            )
+            val turn = if (toolsActive(s)) runToolTurn(s, onDelta, onReasoning)
+            else runPlainTurn(s, userText, onDelta, onReasoning)
+            persistTo(s)
+            return turn
         } catch (e: Exception) {
-            session.messages.removeAt(session.messages.lastIndex) // do not keep a half-finished turn
+            // The plain path lands nothing on a failure, so the only new message is the
+            // prompt: drop it and keep the conversation clean. The tool path may already
+            // have appended real actions through the sink; those stay, because losing a
+            // recorded edit whose file changed on disk is worse than an unanswered turn.
+            if (s.messages.size == afterPrompt) s.messages.removeAt(s.messages.lastIndex)
+            else persistTo(s)
             throw e
+        } finally {
+            turning = false
         }
-        session.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
-        if (turn.responseId != null) session.previousResponseId = turn.responseId
-        persist()
+    }
+
+    /** The one-shot reply this app had before tools: one Responses call, then done. */
+    private fun runPlainTurn(
+        s: SessionState,
+        userText: String,
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): Turn {
+        val prev = if (config.useServerSession) s.previousResponseId else null
+        // The prompt is already the last stored message; drop it from the replayed history
+        // so the client sends it exactly once, as userText, instead of twice.
+        val turn = ResponsesClient(config).turn(
+            system = instructionsFor(s),
+            history = s.promptHistory().dropLast(1),
+            userText = userText,
+            previousResponseId = prev,
+            onDelta = onDelta,
+            onReasoning = onReasoning
+        )
+        s.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
+        if (turn.responseId != null) s.previousResponseId = turn.responseId
         return turn
     }
 
-    fun compact(keepLast: Int, onDelta: (String) -> Unit): String? {
-        val s = Compactor(config).compact(session, keepLast, onDelta)
-        persist()
-        return s
+    /**
+     * The tool-loop path. It replays the running transcript (the just-added prompt is
+     * last) and the loop feeds each tool observation back until the model stops asking
+     * or [AppConfig.maxToolIterations] cuts it off. Only the messages the loop appended
+     * fold into the session, so a failure before any write leaves the session holding
+     * just the prompt, which the caller's catch then drops.
+     */
+    private fun runToolTurn(
+        s: SessionState,
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): Turn {
+        val project = currentProject(s)
+            ?: error("runToolTurn invoked without a writable project") // toolsActive() has gated this
+        val context = ToolContext(
+            root = Paths.get(project.folderPath!!),
+            writeGranted = true,
+            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit
+        )
+        // The wire format is model-facing, so it joins the English system prompt only
+        // when tools are live; a plain or tool-less turn never mentions it.
+        val system = instructionsFor(s) + "\n\n" + CallExtractor.PROTOCOL
+        val loop = ToolLoop(
+            turnSource = ResponsesTurnSource(ResponsesClient(config), system),
+            registry = ToolRegistry(listOf(EditFileTool(), ReadFileTool())),
+            extractor = PromptedCallExtractor(),
+            maxIterations = config.maxToolIterations,
+            chainResponseId = config.useServerSession && s.previousResponseId != null
+        )
+        // The sink appends each assistant message and tool observation as the loop produces
+        // them, so a later failure cannot discard a real edit already made on disk.
+        val outcome = loop.run(
+            history = s.promptHistory(),
+            previousResponseId = s.previousResponseId,
+            ctx = context,
+            onDelta = onDelta,
+            onReasoning = onReasoning,
+            onMessage = { s.messages.add(it) }
+        )
+        if (outcome.responseId != null) s.previousResponseId = outcome.responseId
+        return when (outcome) {
+            is LoopOutcome.Completed ->
+                if (outcome.capReached && outcome.finalTurn.incompleteReason == null)
+                    outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
+                else outcome.finalTurn
+            is LoopOutcome.CapReached -> Turn(
+                text = "",
+                responseId = outcome.responseId,
+                usage = null,
+                finalEvent = null,
+                incompleteReason = "max_tool_iterations"
+            )
+        }
     }
 
-    fun persist() {
-        store.rewriteMessages(session.sessionId, session.messages)
+    fun compact(keepLast: Int, onDelta: (String) -> Unit): String? {
+        turning = true
+        try {
+            val s = Compactor(config).compact(session, keepLast, onDelta)
+            persist()
+            return s
+        } finally {
+            turning = false
+        }
+    }
+
+    fun persist() = persistTo(session)
+
+    /**
+     * Persist one conversation. The summary is written alongside the turns so it survives a
+     * restart: the older turns are already gone after a compaction, so losing only the
+     * summary would drop that context for good.
+     */
+    private fun persistTo(s: SessionState) {
+        store.rewriteMessages(s.sessionId, s.messages)
         store.upsertSession(
-            session.sessionId, session.model, session.previousResponseId, session.messages.size, session.projectId
+            s.sessionId, s.model, s.previousResponseId, s.messages.size, s.projectId, s.summary
         )
     }
 

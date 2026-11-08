@@ -91,6 +91,10 @@ class AppConfigSpec : BehaviorSpec({
             then("the server is the local default, not someone else's LAN address") {
                 cfg.baseUrl shouldBe "http://127.0.0.1:8000/v1"
             }
+            then("the tool loop defaults to asking, never writing silently") {
+                cfg.toolMode shouldBe ToolMode.Ask
+                cfg.maxToolIterations shouldBe 8
+            }
         }
     }
 })

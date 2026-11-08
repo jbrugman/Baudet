@@ -3,8 +3,8 @@ package dev.mule.ui
 import dev.mule.api.CapabilityProbe
 import dev.mule.app.AppState
 import dev.mule.config.AppConfig
+import dev.mule.config.ToolMode
 import dev.mule.i18n.Key
-import dev.mule.i18n.Language
 import dev.mule.i18n.Texts
 import java.awt.BorderLayout
 import java.awt.Color
@@ -30,10 +30,13 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val temperature = JTextField(8)
     private val topP = JTextField(8)
     private val reasoning = JComboBox(arrayOf("", "minimal", "low", "medium", "high"))
-    private val language = JComboBox(arrayOf("English", "Nederlands"))
+    private val language = JComboBox(arrayOf("English", "Nederlands", "Français", "Deutsch"))
+    private val languageCodes = arrayOf("en", "nl", "fr", "de")
     private val useResponses = JCheckBox(Texts[Key.UseResponsesApi])
     private val storeResp = JCheckBox(Texts[Key.StoreResponses])
     private val useServerSession = JCheckBox(Texts[Key.SendPreviousResponseId])
+    private val toolMode = JComboBox(arrayOf(Texts[Key.ToolModeOff], Texts[Key.ToolModeAsk], Texts[Key.ToolModeAuto]))
+    private val maxIterations = JTextField(6)
     private val systemPrompt = JTextArea(5, 34).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -48,6 +51,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     init {
         language.toolTipText = Texts[Key.TipLanguage]
+        toolMode.toolTipText = Texts[Key.TipToolMode]
         val form = formPanel(
             listOf(
                 Texts[Key.LanguageLabel] to language,
@@ -60,6 +64,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 Texts[Key.TemperatureLabel] to temperature,
                 Texts[Key.TopPLabel] to topP,
                 Texts[Key.ReasoningEffortLabel] to reasoning,
+                Texts[Key.ToolModeLabel] to toolMode,
+                Texts[Key.MaxToolIterationsLabel] to maxIterations,
                 "" to useResponses,
                 "" to storeResp,
                 "" to useServerSession,
@@ -108,7 +114,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // field label says. Showing the resolved text here would store it back
         // as user text and freeze it against later language changes.
         systemPrompt.text = c.systemPrompt
-        language.selectedIndex = if (Texts.parse(c.language) == Language.NL) 1 else 0
+        language.selectedIndex = Texts.parse(c.language).ordinal
+        toolMode.selectedIndex = c.toolMode.ordinal
+        maxIterations.text = c.maxToolIterations.toString()
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
     }
@@ -134,8 +142,10 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             fail(Texts[Key.ErrBaseUrl]); return null
         }
+        val mi = maxIterations.text.trim().toIntOrNull()
+        if (mi == null || mi <= 0) { fail(Texts[Key.ErrMaxIterations]); return null }
         return state.config.copy(
-            language = if (language.selectedIndex == 1) "nl" else "en",
+            language = languageCodes[language.selectedIndex],
             baseUrl = url,
             apiKey = String(apiKey.password).trim(),
             apiKeyEnvVar = envVar.text.trim().ifBlank { "OMLX_API_KEY" },
@@ -148,6 +158,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             useResponsesApi = useResponses.isSelected,
             storeResponses = storeResp.isSelected,
             useServerSession = useServerSession.isSelected,
+            toolMode = ToolMode.entries[toolMode.selectedIndex],
+            maxToolIterations = mi,
             systemPrompt = systemPrompt.text
         )
     }

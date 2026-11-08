@@ -15,14 +15,18 @@ import dev.mule.ui.SettingsPanel
 import dev.mule.ui.SidebarToggleIcon
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.Font
 import java.awt.Insets
 import java.nio.file.Path
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JFrame
+import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
+import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
 import kotlin.system.exitProcess
@@ -70,6 +74,10 @@ fun main(args: Array<String>) {
                 SwingUtilities.invokeLater { show(state, frame) }
             }
         }
+
+        // Ask mode reaches back through AppState for a real decision; Auto bypasses it
+        // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
+        state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
 
         frame.isVisible = true
     }
@@ -137,6 +145,40 @@ private fun show(state: AppState, frame: JFrame) {
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
+}
+
+/**
+ * Ask the human to approve a proposed file change: the path as the question, the unified
+ * diff below it. Runs on the event thread and blocks the calling worker until answered, so
+ * the tool loop pauses on a real decision. Any failure to present the dialog denies the
+ * write -- a preview that cannot be shown is not consent. (B3 replaces this modal with an
+ * inline approval card in the transcript.)
+ */
+private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
+    var approved = false
+    try {
+        SwingUtilities.invokeAndWait {
+            val prompt = JTextArea(Texts.fmt(Key.EditReviewPrompt, rel)).apply {
+                isEditable = false
+                isOpaque = false
+            }
+            val preview = JTextArea(diff).apply {
+                isEditable = false
+                font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+            }
+            val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 320) }
+            approved = JOptionPane.showConfirmDialog(
+                owner,
+                arrayOf<Any>(prompt, scroll),
+                Texts[Key.EditReviewTitle],
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            ) == JOptionPane.YES_OPTION
+        }
+    } catch (_: Exception) {
+        approved = false
+    }
+    return approved
 }
 
 /**

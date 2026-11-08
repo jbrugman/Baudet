@@ -34,7 +34,9 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
             // the migration a no-op on a fresh database and idempotent on an old one.
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS project_id VARCHAR(64)",
             // A custom title added after the first release; NULL keeps the derived title.
-            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title VARCHAR(255)"
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title VARCHAR(255)",
+            // The compaction summary added so it survives a restart; NULL when never compacted.
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS summary CLOB"
         ).forEach { sql -> db.createStatement().use { it.execute(sql) } }
     }
 
@@ -59,10 +61,17 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
         }
     }
 
-    override fun upsertSession(id: String, model: String?, prevResponseId: String?, lastSeq: Int, projectId: String?) {
+    override fun upsertSession(
+        id: String,
+        model: String?,
+        prevResponseId: String?,
+        lastSeq: Int,
+        projectId: String?,
+        summary: String?
+    ) {
         db.prepareStatement(
-            "MERGE INTO sessions(id, model, previous_response_id, last_seq, updated_at, project_id) " +
-                "KEY(id) VALUES(?, ?, ?, ?, ?, ?)"
+            "MERGE INTO sessions(id, model, previous_response_id, last_seq, updated_at, project_id, summary) " +
+                "KEY(id) VALUES(?, ?, ?, ?, ?, ?, ?)"
         ).use { ps ->
             ps.setString(1, id)
             ps.setString(2, model)
@@ -70,9 +79,16 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
             ps.setInt(4, lastSeq)
             ps.setLong(5, System.currentTimeMillis())
             ps.setString(6, projectId)
+            ps.setString(7, summary)
             ps.executeUpdate()
         }
     }
+
+    override fun summaryOf(sessionId: String): String? =
+        db.prepareStatement("SELECT summary FROM sessions WHERE id = ?").use { ps ->
+            ps.setString(1, sessionId)
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
+        }
 
     override fun latestSessionId(limit: Int): List<String> =
         db.prepareStatement("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT $limit").use { ps ->

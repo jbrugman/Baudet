@@ -2,6 +2,7 @@ package dev.mule.ui
 
 import dev.mule.api.Turn
 import dev.mule.app.AppState
+import dev.mule.app.ToolGate
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import java.awt.BorderLayout
@@ -12,7 +13,9 @@ import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ActionEvent
 import javax.swing.AbstractAction
+import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
@@ -23,6 +26,7 @@ import javax.swing.SwingUtilities
 import javax.swing.text.DefaultStyledDocument
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
+import javax.swing.border.EmptyBorder
 
 /**
  * Transcript plus input. The stream is written straight into the document
@@ -51,7 +55,16 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         wrapStyleWord = true
     }
     private val sendButton = JButton(Texts[Key.SendButton])
+    private val newSessionButton = JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } }
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
+    /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
+    private val toolWarning = JLabel().apply {
+        foreground = Color(224, 178, 74)
+        font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+        border = EmptyBorder(2, 8, 2, 8)
+        alignmentX = LEFT_ALIGNMENT
+        isVisible = false
+    }
 
     private val normal = SimpleAttributeSet().apply {
         StyleConstants.setFontFamily(this, Font.MONOSPACED)
@@ -76,7 +89,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     init {
         val buttons = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
         buttons.add(sendButton)
-        buttons.add(JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } })
+        buttons.add(newSessionButton)
         buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
 
         // The right pane must stay free to shrink, or the sidebar split caps its
@@ -87,7 +100,11 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val south = JPanel(BorderLayout())
         south.add(buttons, BorderLayout.NORTH)
         south.add(inputScroll, BorderLayout.CENTER)
-        south.add(status, BorderLayout.SOUTH)
+        val bottom = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+        status.alignmentX = LEFT_ALIGNMENT
+        bottom.add(toolWarning)
+        bottom.add(status)
+        south.add(bottom, BorderLayout.SOUTH)
 
         add(scroll, BorderLayout.CENTER)
         add(south, BorderLayout.SOUTH)
@@ -121,6 +138,28 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         }
         status.foreground = Color(160, 160, 160)
         status.text = statusLine()
+        updateToolWarning()
+    }
+
+    /**
+     * Reflects whether this conversation can change files at all. When the active project
+     * has no linked folder, or a folder without the Write right, a turn runs as a plain
+     * chat and a request to edit would silently do nothing: this names that up front, in
+     * amber, so the fix (link a folder, grant Write) is visible before the user asks. A
+     * chat with no project, or tools switched off on purpose, stays quiet by design.
+     */
+    private fun updateToolWarning() {
+        val key = when (state.toolGate()) {
+            ToolGate.NoFolder -> Key.WarnNoFolder
+            ToolGate.NoWrite -> Key.WarnNoWrite
+            else -> null
+        }
+        if (key == null) {
+            toolWarning.isVisible = false
+        } else {
+            toolWarning.text = Texts[key]
+            toolWarning.isVisible = true
+        }
     }
 
     /**
@@ -157,6 +196,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun setBusy(b: Boolean) {
         busy = b
         sendButton.isEnabled = !b
+        newSessionButton.isEnabled = !b
         status.foreground = if (b) Color(160, 160, 160) else Color(120, 200, 130)
     }
 
@@ -256,6 +296,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     private fun newSession() {
+        if (busy) return
         state.newSession()
         refresh()
         status.text = Texts.fmt(Key.NewSessionStatus, state.session.sessionId)

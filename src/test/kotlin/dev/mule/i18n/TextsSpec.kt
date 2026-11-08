@@ -21,6 +21,12 @@ class TextsSpec : BehaviorSpec({
             then("no key ships an empty Dutch string") {
                 Key.entries.forEach { it.nl.shouldNotBeBlank() }
             }
+            then("no key ships an empty French string") {
+                Key.entries.forEach { it.fr.shouldNotBeBlank() }
+            }
+            then("no key ships an empty German string") {
+                Key.entries.forEach { it.de.shouldNotBeBlank() }
+            }
             then("key names stay unique") {
                 Key.entries.map { it.name }.distinct().size shouldBe Key.entries.size
             }
@@ -48,6 +54,24 @@ class TextsSpec : BehaviorSpec({
             Texts.language = Language.EN
             then("the English text returns") {
                 Texts[Key.SaveButton] shouldBe "Save"
+            }
+        }
+    }
+
+    given("French selected") {
+        `when`("reading a string") {
+            Texts.language = Language.FR
+            then("the same key yields the French text") {
+                Texts[Key.SaveButton] shouldBe "Enregistrer"
+            }
+        }
+    }
+
+    given("German selected") {
+        `when`("reading a string") {
+            Texts.language = Language.DE
+            then("the same key yields the German text") {
+                Texts[Key.SaveButton] shouldBe "Speichern"
             }
         }
     }
@@ -80,10 +104,15 @@ class TextsSpec : BehaviorSpec({
             then("en selects English") {
                 Texts.parse("en") shouldBe Language.EN
             }
-            then("anything else falls back to English instead of failing") {
+            then("fr selects French") {
+                Texts.parse("fr") shouldBe Language.FR
+            }
+            then("de selects German") {
+                Texts.parse("de") shouldBe Language.DE
+            }
+            then("anything unrecognized falls back to English instead of failing") {
                 Texts.parse("") shouldBe Language.EN
-                Texts.parse("de") shouldBe Language.EN
-                Texts.parse("fr") shouldBe Language.EN
+                Texts.parse("es") shouldBe Language.EN
             }
         }
     }

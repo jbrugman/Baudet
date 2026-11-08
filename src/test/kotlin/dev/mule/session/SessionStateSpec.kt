@@ -17,14 +17,17 @@ class SessionStateSpec : BehaviorSpec({
         `when`("building the prompt history") {
             val history = session.promptHistory()
 
-            then("the summary leads as a system message, so replay still carries it") {
-                history.size shouldBe 3
-                history.first().role shouldBe "system"
-                history.first().content.contains("decisions taken earlier") shouldBe true
+            then("only the kept turns are replayed, never a system summary row") {
+                history.size shouldBe 2
+                history.map { it.role } shouldBe listOf("user", "assistant")
+                // The summary rides in the system instructions (see AppState.instructionsFor),
+                // not here: the request builder drops system rows, so folding it in would
+                // silently lose it after a compaction.
+                (history.any { it.role == "system" }) shouldBe false
             }
             then("the kept turns follow in their original order") {
-                history[1].content shouldBe "first question"
-                history[2].content shouldBe "first answer"
+                history[0].content shouldBe "first question"
+                history[1].content shouldBe "first answer"
             }
         }
     }
