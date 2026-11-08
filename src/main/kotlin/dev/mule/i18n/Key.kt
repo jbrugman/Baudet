@@ -240,6 +240,16 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     FileTreeEmpty("empty folder", "lege map", "dossier vide", "leerer Ordner"),
     CopyPath("Copy path", "Kopieer pad", "Copier le chemin", "Pfad kopieren"),
 
+    // ---- git status in the file tree -----------------------------------
+    DiffTitle("Git changes for {0}", "Git-wijzigingen voor {0}", "Modifications Git pour {0}", "Git-Änderungen für {0}"),
+    DiffNoGit("This folder is not a git repository.", "Deze map is geen git-repository.", "Ce dossier n'est pas un dépôt Git.", "Dieser Ordner ist kein Git-Repository."),
+    DiffNoChanges("{0} has no git changes.", "{0} heeft geen git-wijzigingen.", "{0} n'a aucune modification Git.", "{0} weist keine Git-Änderungen auf."),
+    DiffUntracked("{0} is new and untracked, so there is no committed version to compare.", "{0} is nieuw en niet gevolgd, er is dus geen vastgelegde versie om mee te vergelijken.", "{0} est nouveau et non suivi, il n'y a donc pas de version enregistrée à comparer.", "{0} ist neu und nicht verfolgt, daher gibt es keine gespeicherte Version zum Vergleich."),
+    GitTagAdded("added", "toegevoegd", "ajouté", "hinzugefügt"),
+    GitTagModified("modified", "gewijzigd", "modifié", "geändert"),
+    GitTagDeleted("deleted", "verwijderd", "supprimé", "gelöscht"),
+    GitTagUntracked("untracked", "niet gevolgd", "non suivi", "nicht verfolgt"),
+
     // ---- startup smoke run -------------------------------------------------
     SmokeDataDir("mule smoke · data-dir={0}", "mule smoke · data-dir={0}", "mule smoke · rép-données={0}", "mule smoke · Datenverzeichnis={0}"),
     SmokeModelSet("model     = set to '{0}' and saved", "model     = gezet op '{0}' en opgeslagen", "modèle   = réglé sur '{0}' et enregistré", "Modell    = auf '{0}' gesetzt und gespeichert"),

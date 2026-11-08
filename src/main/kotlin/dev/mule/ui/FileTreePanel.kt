@@ -3,11 +3,16 @@ package dev.mule.ui
 import dev.mule.app.AppState
 import dev.mule.fs.FileEntry
 import dev.mule.fs.FileLister
+import dev.mule.git.FileChange
+import dev.mule.git.GitInspector
+import dev.mule.git.GitStatus
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.project.FolderPermission
 import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.Color
+import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -28,6 +33,7 @@ import javax.swing.event.TreeExpansionEvent
 import javax.swing.event.TreeExpansionListener
 import javax.swing.JTree
 import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
 
@@ -42,17 +48,23 @@ import javax.swing.tree.TreePath
  * whatever is selected on the left ([showProject]), and it only populates when that
  * project has a linked folder with Read granted -- the one right this app enforces.
  *
- * A right-click anywhere on a row offers [Key.CopyPath], which copies the path
- * relative to the project folder onto the clipboard. There is no editor yet, so the
- * panel stays a faithful read-only view of the structure.
+ * When the folder is a git repository each file row carries its change state: added or
+ * changed files are green, deleted ones red (shown as a ghost row even though the file is
+ * gone from disk), untracked ones blue, and the tooltip names the state. Double-clicking a
+ * file opens its git patch in [DiffViewDialog]. A right-click anywhere on a row offers
+ * [Key.CopyPath]. There is still no editor, so the panel stays a read-only view.
  */
 class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
 
+    private val git = GitInspector()
+
+    /** The current change snapshot; refreshed on load and on Refresh. */
+    private var gitStatus: GitStatus = GitStatus.NOT_A_REPO
+
     // Rows fill the viewport width, so a right-click anywhere on a line hits it (the blue
-    // selection spans the whole line too); long names clip with an ellipsis.
-    private val tree = object : JTree() {
-        override fun getScrollableTracksViewportWidth(): Boolean = true
-    }.apply {
+    // selection spans the whole line too); long names clip with an ellipsis. A tooltip names
+    // a file's git change wherever the pointer is over the row.
+    private val tree = MuleTree().apply {
         isRootVisible = true       // the root is the project folder itself, a useful label
         showsRootHandles = true
     }
@@ -85,6 +97,7 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         add(controls, BorderLayout.NORTH)
         add(cards, BorderLayout.CENTER)
 
+        tree.cellRenderer = CellRenderer()
         tree.addTreeExpansionListener(object : TreeExpansionListener {
             override fun treeExpanded(e: TreeExpansionEvent) = loadOnExpand(e.path)
             override fun treeCollapsed(e: TreeExpansionEvent) {}
@@ -99,6 +112,12 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
                 // macOS raises the popup on release, and a two-finger trackpad tap is a
                 // secondary (right) button with no press-side trigger, so catch it here.
                 if (!popupShown && (e.isPopupTrigger || SwingUtilities.isRightMouseButton(e))) maybePopup(e)
+            }
+
+            override fun mouseClicked(e: MouseEvent) {
+                if (e.clickCount < 2 || !SwingUtilities.isLeftMouseButton(e)) return
+                val node = fileNodeAt(e) ?: return
+                if (node.path != null && !node.isDirectory) openDiff(node)
             }
         })
 
@@ -122,6 +141,7 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private fun showMessage(text: String) {
         rootPath = null
+        gitStatus = GitStatus.NOT_A_REPO
         message.text = "<html><body style='width:200px'>${escape(text)}</body></html>"
         refreshBtn.isEnabled = false
         hiddenBox.isEnabled = false
@@ -137,9 +157,10 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         (cards.layout as CardLayout).show(cards, CARD_TREE)
     }
 
-    /** Rebuild the whole tree from the project root; only its first level is read. */
+    /** Rebuild the whole tree from the project root; re-reads git status, then reads the first level. */
     private fun rebuild() {
         val path = rootPath ?: return
+        gitStatus = git.status(path)
         val root = makeDirNode(rootName, path)
         tree.model = DefaultTreeModel(root)
         loadChildren(root, path)
@@ -159,10 +180,14 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun loadChildren(node: DefaultMutableTreeNode, dir: Path) {
         node.removeAllChildren()
         val entries = FileLister.list(dir, hiddenBox.isSelected)
-        if (entries.isEmpty()) {
+        val listed = entries.filterNot { it.isDirectory }.map { it.name }.toSet()
+        // Show files git reports deleted here but that are no longer on disk, so the change is visible.
+        val deleted = gitStatus.deletedUnder(gitRel(dir)).filterNot { it in listed }
+        if (entries.isEmpty() && deleted.isEmpty()) {
             node.add(DefaultMutableTreeNode(FileNode(null, Texts[Key.FileTreeEmpty], false)))
         } else {
             entries.forEach { node.add(childNode(it)) }
+            deleted.forEach { node.add(DefaultMutableTreeNode(FileNode(dir.resolve(it), it, false))) }
         }
         (tree.model as? DefaultTreeModel)?.nodeStructureChanged(node)
     }
@@ -187,17 +212,51 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
             (it as? FileNode)?.path == null
         } == true
 
-    // ---- right-click context menu -----------------------------------------
+    // ---- git helpers -------------------------------------------------------
 
-    private fun maybePopup(e: MouseEvent) {
-        // Swing only matches a point over the node text, so a click on the empty part of a
-        // full-width row misses; fall back to the row whose vertical span holds the click.
-        val path = tree.getPathForLocation(e.x, e.y) ?: rowPathByY(e.y) ?: return
-        tree.selectionPath = path
-        val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
-        buildPopup(node).show(tree, e.x, e.y)
-        popupShown = true
-        e.consume()
+    /** The path relative to the project folder as git and the tree both use it; empty for the root. */
+    private fun gitRel(path: Path): String {
+        val root = rootPath ?: return ""
+        if (path == root) return ""
+        return root.relativize(path).toString()
+    }
+
+    /** The change git sees for a file path, or null when it is the root, has no root, or is unchanged. */
+    private fun changeFor(path: Path): FileChange? {
+        val rel = gitRel(path)
+        if (rel.isEmpty()) return null
+        return gitStatus.changeOf(rel)
+    }
+
+    /** Open the git patch for a file, or an explanation of why there is nothing to show. */
+    private fun openDiff(file: FileNode) {
+        val path = file.path ?: return
+        val root = rootPath ?: return
+        val rel = gitRel(path)
+        if (rel.isEmpty()) return
+        if (!gitStatus.isRepository) {
+            DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit])
+            return
+        }
+        val patch = git.diffPatch(root, rel)
+        val body = when {
+            patch.isNotEmpty() -> patch
+            changeFor(path) == FileChange.Untracked -> Texts.fmt(Key.DiffUntracked, rel)
+            else -> Texts.fmt(Key.DiffNoChanges, rel)
+        }
+        DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), body)
+    }
+
+    // ---- pointer resolution ------------------------------------------------
+
+    /** The row at the pointer; Swing misses the empty part of a full-width row, so fall back to y. */
+    private fun resolvePath(e: MouseEvent): TreePath? =
+        tree.getPathForLocation(e.x, e.y) ?: rowPathByY(e.y)
+
+    private fun fileNodeAt(e: MouseEvent): FileNode? {
+        val p = resolvePath(e) ?: return null
+        val node = p.lastPathComponent as? DefaultMutableTreeNode ?: return null
+        return node.userObject as? FileNode
     }
 
     /** The row whose vertical span contains y, whatever its text width; null when y is off-tree. */
@@ -207,6 +266,17 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
             if (y in b.y until b.y + b.height) return tree.getPathForRow(r)
         }
         return null
+    }
+
+    // ---- right-click context menu -----------------------------------------
+
+    private fun maybePopup(e: MouseEvent) {
+        val path = resolvePath(e) ?: return
+        tree.selectionPath = path
+        val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
+        buildPopup(node).show(tree, e.x, e.y)
+        popupShown = true
+        e.consume()
     }
 
     private fun buildPopup(node: DefaultMutableTreeNode): JPopupMenu {
@@ -229,6 +299,54 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun escape(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    // ---- rendering ----------------------------------------------------------
+
+    /** The tree proper: full-width rows plus a tooltip naming a file's git change under the pointer. */
+    private inner class MuleTree : JTree() {
+        override fun getScrollableTracksViewportWidth(): Boolean = true
+
+        override fun getToolTipText(e: MouseEvent): String? {
+            val node = fileNodeAt(e) ?: return null
+            val path = node.path ?: return null
+            if (node.isDirectory) return null
+            return when (changeFor(path)) {
+                FileChange.Added, FileChange.Renamed -> Texts[Key.GitTagAdded]
+                FileChange.Modified -> Texts[Key.GitTagModified]
+                FileChange.Deleted -> Texts[Key.GitTagDeleted]
+                FileChange.Untracked -> Texts[Key.GitTagUntracked]
+                else -> null
+            }
+        }
+    }
+
+    /** The default tree look, with only the text colour changed to carry the git state of a file. */
+    private inner class CellRenderer : DefaultTreeCellRenderer() {
+        override fun getTreeCellRendererComponent(
+            tree: JTree?,
+            value: Any?,
+            isSelected: Boolean,
+            expanded: Boolean,
+            leaf: Boolean,
+            row: Int,
+            hasFocus: Boolean
+        ): Component {
+            super.getTreeCellRendererComponent(tree, value, isSelected, expanded, leaf, row, hasFocus)
+            if (!isSelected) {
+                val node = value as? DefaultMutableTreeNode
+                val file = node?.userObject as? FileNode
+                if (file != null && file.path != null && !file.isDirectory) {
+                    when (changeFor(file.path)) {
+                        FileChange.Added, FileChange.Modified, FileChange.Renamed -> foreground = COLOR_ADDED
+                        FileChange.Deleted -> foreground = COLOR_DELETED
+                        FileChange.Untracked -> foreground = COLOR_UNTRACKED
+                        else -> Unit
+                    }
+                }
+            }
+            return this
+        }
+    }
+
     private class FileNode(
         val path: Path?,        // null only for the placeholder and the "empty folder" marker
         val name: String,
@@ -240,5 +358,10 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
     private companion object {
         const val CARD_TREE = "tree"
         const val CARD_MESSAGE = "message"
+
+        // GitHub-ish: additions green, deletions red, untracked a soft blue.
+        val COLOR_ADDED = Color(46, 160, 67)
+        val COLOR_DELETED = Color(210, 70, 70)
+        val COLOR_UNTRACKED = Color(130, 170, 220)
     }
 }
