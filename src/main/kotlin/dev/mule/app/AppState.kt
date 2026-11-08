@@ -119,8 +119,25 @@ class AppState(val store: H2Store) {
     }
 
     companion object {
-    /** Development default: inside the repo. Override with -Dmule.home. */
-        fun dataDir(): Path = Paths.get(System.getProperty("mule.home") ?: "mule-data")
+        /**
+         * The data directory. Defaults to a per-user location that does not depend
+         * on the working directory: a packaged macOS app is launched by Finder with
+         * cwd=/, where a relative "mule-data" would resolve to the read-only root.
+         * Override with -Dmule.home for a checkout-local store.
+         */
+        fun dataDir(): Path {
+            System.getProperty("mule.home")?.let { return Paths.get(it) }
+            val home = Paths.get(System.getProperty("user.home"))
+            val os = System.getProperty("os.name").lowercase()
+            return when {
+                os.contains("mac") ->
+                    home.resolve("Library").resolve("Application Support").resolve("Mule")
+                os.contains("win") ->
+                    System.getenv("APPDATA")?.let { Paths.get(it, "Mule") } ?: home.resolve(".mule")
+                else -> System.getenv("XDG_DATA_HOME")?.let { Paths.get(it, "mule") }
+                    ?: home.resolve(".local").resolve("share").resolve("mule")
+            }
+        }
         fun open(): AppState = AppState(H2Store(dataDir()))
     }
 }
