@@ -1,15 +1,5 @@
 package dev.mule.session
 
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class Msg(
-    val role: String,
-    val content: String,
-    val responseId: String? = null,
-    val promptTokens: Long? = null
-)
-
 /**
  * One conversation. previousResponseId is the wire to the server-side session;
  * null means we send the history ourselves.
@@ -22,6 +12,9 @@ class SessionState(
 ) {
     /** Summary after compaction; replaces the older turns in the prompt. */
     var summary: String? = null
+
+    /** The project this conversation belongs to; null means the Unassigned bucket. */
+    var projectId: String? = null
 
     /** Rough heuristic (~4 chars/token). No tokenizer: those are model-specific. */
     fun estimateTokens(): Long {
@@ -41,9 +34,4 @@ class SessionState(
     fun transcript(): String = buildString {
         messages.forEach { m -> append(m.role).append(": ").append(m.content).append("\n\n") }
     }
-}
-
-object SessionIds {
-    fun new(): String =
-        "s-" + java.util.UUID.randomUUID().toString().substring(0, 8)
 }
