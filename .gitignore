@@ -1,0 +1,7 @@
+target/
+mule-data/
+.idea/
+*.iml
+.DS_Store
+*.log
+dependency-reduced-pom.xml
