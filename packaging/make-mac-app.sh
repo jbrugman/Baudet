@@ -8,9 +8,9 @@
 # is produced by the app itself (`java -jar ... --export-icons`), so the mark lives
 # in exactly one place and this script ships no bitmap of its own.
 #
-# The bundle is UNSIGNED. A copy downloaded from elsewhere is blocked by Gatekeeper
-# until it is codesigned and notarized -- a separate step that needs an Apple
-# Developer ID and is not done here.
+# The bundle is ad-hoc signed only: it carries no Apple Developer ID, so a copy
+# downloaded from elsewhere is blocked by Gatekeeper until it is re-signed with a
+# Developer ID and notarized -- a separate step that is not done here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -78,6 +78,16 @@ PLIST="$DIST/Mule.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 echo "Stamped bundle version $VERSION into $PLIST"
+
+# Stamping Info.plist after jpackage's ad-hoc signature breaks the code-signature
+# seal ("invalid Info.plist: plist or signature have been modified"). On Apple
+# Silicon a bundle with a broken seal aborts during GUI startup in
+# -[NSApplicationAWT registerWithProcessManager], so `open` quits before a window
+# appears. Re-sign ad-hoc to re-bind the stamped Info.plist, then assert the seal
+# so it cannot silently regress (set -e fails the build if it is still broken).
+codesign --force --deep -s - "$DIST/Mule.app"
+codesign --verify --deep --strict "$DIST/Mule.app"
+echo "Re-signed the stamped bundle (ad-hoc) and verified its seal"
 
 # Optionally wrap the stamped .app into a .dmg. It reuses the image just stamped,
 # so the disk image carries the same honest version. The result is unsigned: a
