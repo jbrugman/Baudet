@@ -28,6 +28,7 @@ class ToolLoop(
 ) {
 
     private val runner = ToolRunner(registry)
+    private var onMessage: (Msg) -> Unit = {}
 
     /** Three grave accents, built from a code point so the source never holds the run. */
     private val fenceChars = "\u0060\u0060\u0060"
@@ -37,8 +38,10 @@ class ToolLoop(
         previousResponseId: String? = null,
         ctx: ToolContext,
         onDelta: (String) -> Unit = {},
-        onReasoning: (String) -> Unit = {}
+        onReasoning: (String) -> Unit = {},
+        onMessage: (Msg) -> Unit = {}
     ): LoopOutcome {
+        this.onMessage = onMessage
         val msgs = history.toMutableList()
         val added = mutableListOf<Msg>()
         val steps = mutableListOf<ToolStep>()
@@ -100,12 +103,14 @@ class ToolLoop(
         val msg = Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt)
         msgs.add(msg)
         added.add(msg)
+        onMessage(msg)
     }
 
     private fun addObservation(msgs: MutableList<Msg>, added: MutableList<Msg>, call: ToolCall, result: ToolResult) {
         val msg = Msg("user", observation(call, result))
         msgs.add(msg)
         added.add(msg)
+        onMessage(msg)
     }
 
     /**

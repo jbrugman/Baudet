@@ -23,13 +23,13 @@ class SessionState(
         return chars / 4L
     }
 
-    /** What actually goes into the prompt during client-side replay. */
-    fun promptHistory(): List<Msg> {
-        val s = summary
-        return if (s == null) messages.toList()
-        // Model-facing: English regardless of the UI language.
-        else listOf(Msg("system", "Summary of the earlier conversation:\n$s")) + messages
-    }
+    /**
+     * The kept turns for client-side replay. The summary is deliberately NOT folded in
+     * here as a system row: the request builder and the tool transcript both drop system
+     * rows, so folding it in would silently lose it. It rides in the system instructions
+     * instead, which every path already sends; see AppState.instructionsFor.
+     */
+    fun promptHistory(): List<Msg> = messages.toList()
 
     fun transcript(): String = buildString {
         messages.forEach { m -> append(m.role).append(": ").append(m.content).append("\n\n") }

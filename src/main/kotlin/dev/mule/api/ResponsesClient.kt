@@ -42,7 +42,7 @@ class ResponsesClient(private val cfg: AppConfig) {
         return call(body, onDelta)
     }
 
-    private fun buildRequest(
+    internal fun buildRequest(
         system: String,
         history: List<Msg>,
         userText: String,

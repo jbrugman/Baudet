@@ -55,6 +55,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         wrapStyleWord = true
     }
     private val sendButton = JButton(Texts[Key.SendButton])
+    private val newSessionButton = JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } }
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
     /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
     private val toolWarning = JLabel().apply {
@@ -88,7 +89,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     init {
         val buttons = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
         buttons.add(sendButton)
-        buttons.add(JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } })
+        buttons.add(newSessionButton)
         buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
 
         // The right pane must stay free to shrink, or the sidebar split caps its
@@ -195,6 +196,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun setBusy(b: Boolean) {
         busy = b
         sendButton.isEnabled = !b
+        newSessionButton.isEnabled = !b
         status.foreground = if (b) Color(160, 160, 160) else Color(120, 200, 130)
     }
 
@@ -294,6 +296,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     private fun newSession() {
+        if (busy) return
         state.newSession()
         refresh()
         status.text = Texts.fmt(Key.NewSessionStatus, state.session.sessionId)
