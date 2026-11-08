@@ -60,6 +60,36 @@ class GitInspectorSpec : BehaviorSpec({
             then("it reports not a repository") { GitInspector().status(root).isRepository shouldBe false }
         }
     }
+
+    given("a repository whose project folder is a subdirectory") {
+        val repo = freshDir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "mule@example.com")
+        git(repo, "config", "user.name", "Mule Test")
+        val sub = Files.createDirectories(repo.resolve("sub"))
+        Files.writeString(sub.resolve("tracked.txt"), "one\n")
+        Files.writeString(sub.resolve("removed.txt"), "gone\n")
+        git(repo, "-c", "commit.gpgsign=false", "add", ".")
+        git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "initial")
+        Files.writeString(sub.resolve("tracked.txt"), "two\n") // modified
+        Files.writeString(sub.resolve("new.txt"), "brand new\n") // untracked
+        Files.delete(sub.resolve("removed.txt")) // deleted
+
+        val inspector = GitInspector()
+
+        `when`("reading the status from the subdirectory as the project folder") {
+            val st = inspector.status(sub)
+            then("it is a repository") { st.isRepository shouldBe true }
+            then("paths key relative to the project folder, not the repository root") {
+                st.changeOf("tracked.txt") shouldBe FileChange.Modified
+                st.changeOf("new.txt") shouldBe FileChange.Untracked
+                st.changeOf("sub/tracked.txt") shouldBe null
+            }
+            then("a deletion is found relative to the project folder") {
+                st.deletedUnder("") shouldBe listOf("removed.txt")
+            }
+        }
+    }
 })
 
 /** Runs git in [dir], throwing with the combined output when it fails; keeps the test honest. */
