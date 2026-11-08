@@ -6,6 +6,7 @@ import dev.mule.api.ModelsClient
 import dev.mule.app.AppState
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
+import dev.mule.ui.AppIcon
 import dev.mule.ui.ChatPanel
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
@@ -34,6 +35,7 @@ fun main(args: Array<String>) {
         frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
         frame.size = Dimension(1040, 720)
         frame.setLocationRelativeTo(null)
+        frame.iconImages = AppIcon.images()
 
         var shown = Texts.language
         show(state, frame)
