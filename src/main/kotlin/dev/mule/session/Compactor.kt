@@ -33,12 +33,12 @@ class Compactor(private val cfg: AppConfig) {
 
     companion object {
         /**
-         * Whether [turn] may replace the older turns. A summary the backend cut off -- a token
-         * limit reached before it finished, reported through incompleteReason -- must never stand
-         * in for the turns it would drop: those turns are gone the moment they are cleared, so
-         * only a complete, non-blank summary is allowed to replace them.
+         * Whether [turn] may replace the older turns. Those turns are gone the moment they are
+         * cleared, so only an answer the backend proved it finished is allowed to replace them.
+         * A summary cut off at a token limit reports an incompleteReason, and a stream that
+         * closed without a terminal event never reaches a completed state, so both are refused.
          */
         internal fun acceptsSummary(turn: dev.mule.api.Turn): Boolean =
-            turn.text.isNotBlank() && turn.incompleteReason == null
+            turn.text.isNotBlank() && turn.incompleteReason == null && turn.completed
     }
 }
