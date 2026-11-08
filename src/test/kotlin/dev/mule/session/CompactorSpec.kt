@@ -52,4 +52,19 @@ class CompactorSpec : BehaviorSpec({
             then("it is refused") { Compactor.acceptsSummary(turn) shouldBe false }
         }
     }
+
+    given("a stream that closed without a terminal event") {
+        val turn = Turn(
+            text = "only a partial summary arrived before the stream ended",
+            responseId = null,
+            usage = null,
+            finalEvent = "stream_end_after_3 events",
+            incompleteReason = null
+        )
+        `when`("asking whether it may replace the older turns") {
+            then("it is refused, because nothing proved the answer finished") {
+                Compactor.acceptsSummary(turn) shouldBe false
+            }
+        }
+    }
 })

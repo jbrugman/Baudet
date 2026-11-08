@@ -16,4 +16,12 @@ data class Turn(
     val incompleteReason: String? = null,
     /** native function calls the backend returned; empty when the answer is prose only */
     val functionCalls: List<FunctionCall> = emptyList()
-)
+) {
+    /**
+     * True only when the backend sent an explicit successful terminal event. A stream that
+     * simply closed, or one that reported a reason, is not a completion, so callers that
+     * depend on a finished answer -- compaction above all -- can demand one.
+     */
+    val completed: Boolean
+        get() = finalEvent == "response.completed"
+}
