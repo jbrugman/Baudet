@@ -13,8 +13,8 @@ It speaks the OpenAI **Responses API** by default, with the Chat Completions
 shape tolerated as a fallback.
 
 It keeps the server-side session: each turn sends `previous_response_id`, so
-the backend carries the context instead of the client resending it. Settings, projects and transcripts are persisted locally in an embedded H2
-database.
+the backend carries the context instead of the client resending it. 
+Settings, projects and transcripts are persisted locally in an embedded H2 database.
 
 ## Why it was started
 
