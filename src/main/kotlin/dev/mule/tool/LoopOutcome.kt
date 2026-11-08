@@ -1,0 +1,39 @@
+package dev.mule.tool
+
+import dev.mule.session.Msg
+
+/**
+ * What a whole loop run ends as. Two endings only: the model stopped asking for
+ * tools (Completed) or the iteration cap cut it off (CapReached). Neither is an
+ * error -- a refused or failed tool is fed back to the model as an observation and
+ * it can keep going, so tool trouble shows up in [steps], not in the outcome type.
+ *
+ * [messages] are only the messages this run appended (assistant turns plus the
+ * tool observations), never the caller's own new user message: that lets the
+ * caller persist just the new turn. [undos] collects the revert handles of every
+ * write that landed, and [responseId] is the last reply's id so a caller can chain
+ * or store it.
+ */
+sealed class LoopOutcome {
+    abstract val steps: List<ToolStep>
+    abstract val messages: List<Msg>
+    abstract val undos: List<() -> Unit>
+    abstract val responseId: String?
+
+    /** The model gave a final answer with no further tool calls. */
+    data class Completed(
+        val finalText: String,
+        override val responseId: String?,
+        override val steps: List<ToolStep>,
+        override val messages: List<Msg>,
+        override val undos: List<() -> Unit>
+    ) : LoopOutcome()
+
+    /** The run hit [ToolLoop.maxIterations] while the model still wanted to act. */
+    data class CapReached(
+        override val responseId: String?,
+        override val steps: List<ToolStep>,
+        override val messages: List<Msg>,
+        override val undos: List<() -> Unit>
+    ) : LoopOutcome()
+}
