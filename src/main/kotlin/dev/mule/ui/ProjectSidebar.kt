@@ -200,7 +200,7 @@ class ProjectSidebar(
         refreshing = false
         val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
         recordSelection(node)
-      buildPopup(node).show(tree, e.x, e.y)
+        buildPopup(node).show(tree, e.x, e.y)
         popupShown = true
         e.consume()
     }
