@@ -11,6 +11,7 @@ import dev.mule.ui.ChatPanel
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
 import java.awt.Dimension
+import java.nio.file.Path
 import javax.swing.JFrame
 import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
@@ -18,10 +19,21 @@ import javax.swing.UIManager
 import kotlin.system.exitProcess
 
 /**
- * --smoke        : no GUI, fetch the model list and exit (costs no GPU time)
- * --smoke --probe: additionally run the capability probe (two mini-calls)
+ * --export-icons=<dir>: headless, write the macOS .iconset and exit (a build step)
+ * --smoke             : no GUI, fetch the model list and exit (costs no GPU time)
+ * --smoke --probe     : additionally run the capability probe (two mini-calls)
  */
 fun main(args: Array<String>) {
+    // Icon export is a build step the packaging script calls. It runs before the
+    // database is opened or a window exists, so it stays headless and writes no
+    // state -- the only thing it touches is the iconset directory it is given.
+    args.indexOfFirst { it == "--export-icons" || it.startsWith("--export-icons=") }
+        .takeIf { it >= 0 }
+        ?.let { i ->
+            val dir = args[i].substringAfter('=', "").ifBlank { args.getOrNull(i + 1).orEmpty() }
+            exitProcess(exportIcons(dir))
+        }
+
     val state = AppState.open()
     if (args.contains("--smoke")) exitProcess(smoke(state, args))
 
@@ -73,6 +85,25 @@ private fun show(state: AppState, frame: JFrame) {
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
+}
+
+/**
+ * Write the macOS .iconset into the directory named by --export-icons. Exits 0 on
+ * success, 2 on a usage or IO error -- distinct from the smoke codes so a build
+ * failure is never mistaken for a backend being unreachable.
+ */
+private fun exportIcons(dir: String): Int {
+    if (dir.isBlank()) {
+        System.err.println("usage: --export-icons=<dir>")
+        return 2
+    }
+    return try {
+        AppIcon.writeIconSet(Path.of(dir)).forEach { println("wrote $it") }
+        0
+    } catch (e: Exception) {
+        System.err.println("icon export failed: ${e.message}")
+        2
+    }
 }
 
 private fun smoke(state: AppState, args: Array<String>): Int {

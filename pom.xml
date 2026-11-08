@@ -163,4 +163,35 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- Produces target/dist/Mule.app from the shaded jar. Bound to verify, not
+         package, so the shade step has already produced the jar and the profile
+         never re-enters Maven (the script greps the version from the pom itself).
+         macOS only: jpackage and iconutil are not present on other platforms. -->
+    <profile>
+      <id>mac-app</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>package-mac-app</id>
+                <phase>verify</phase>
+                <goals><goal>exec</goal></goals>
+                <configuration>
+                  <executable>bash</executable>
+                  <arguments>
+                    <argument>${project.basedir}/packaging/make-mac-app.sh</argument>
+                  </arguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

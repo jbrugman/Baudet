@@ -73,21 +73,68 @@ reflection; H2 instead of sqlite-jdbc because sqlite ships platform `.dylib`
 files that are guesswork under AOT; kotlinx-serialization for the same reason.
 JDK 25, matching the installed GraalVM CE 25.
 
-## Getting started
+## Build and run
 
 Requires JDK 25. The API key is read from the `OMLX_API_KEY` environment
 variable unless one is typed into Settings.
 
+Run it straight from source with Maven:
+
 ```bash
 mvn -B -Dkotlin.compiler.execution.strategy=in-process test          # unit tests
-mvn -Dkotlin.compiler.execution.strategy=in-process compile
-mvn -q -B exec:java                                   # the app
+mvn -q -B exec:java                                   # the app, from source
 
 mvn -q -B exec:java -Dexec.args="--smoke"             # models only, no GPU cost
 mvn -q -B exec:java -Dexec.args="--smoke --probe"     # + capability probe (2 calls)
 ```
 
+Or build the runnable jar (shaded, with `Main-Class` set) and run it with any
+`java` on your path:
+
+```bash
+mvn -B package                                        # -> target/mule-<version>.jar
+java -jar target/mule-<version>.jar                   # the app
+java -jar target/mule-<version>.jar --smoke           # headless model-list check
+```
+
 Data lives in `./mule-data/mule.mv.db`; override with `-Dmule.home=/some/dir`.
+
+## Packaging (macOS)
+
+`jpackage` turns the shaded jar into a self-contained `Mule.app` with its own
+bundled runtime. The icon is not a committed bitmap: the app draws it itself,
+and `--export-icons` writes the `.iconset` that `iconutil` compiles into the
+`.icns` -- so the mark is defined in exactly one place.
+
+```bash
+mvn -B clean verify -Pmac-app          # -> target/dist/Mule.app
+```
+
+The `mac-app` profile runs `packaging/make-mac-app.sh` once the jar is built.
+That script exports the icon, compiles the `.icns`, and bundles the full default
+runtime. Set `MULE_PKG_TYPE=dmg` to also wrap the `.app` into a `.dmg`.
+
+One honest wrinkle: `jpackage` refuses a version whose major number is `0`, so
+the bundle is built with a placeholder version and the real pre-alpha version
+(currently `0.1.0`) is written back into `Info.plist`. The shipped `.app`
+therefore reports `0.1.0` in Finder, not the placeholder it was built from.
+
+The bundle is **unsigned**: a copy downloaded from another machine is blocked by
+Gatekeeper until it is codesigned and notarized with an Apple Developer ID,
+which is not part of this build. What was verified here: the bundle builds, its
+`Info.plist` carries `0.1.0`, and its launcher boots the bundled runtime and
+runs the app (exercised through `--export-icons`, which needs no window). The
+graphical window itself opens on a real desktop session.
+
+## Continuous integration
+
+GitHub Actions, in `.github/workflows/`:
+
+- `java-maven-ci.yml` -- on every push and pull request to `main`: build and run
+  the test suite with `mvn -B clean verify`.
+- `package-mac.yml` -- on push to `main`: build on `macos-latest`, run the same
+  `mac-app` packaging, and upload the resulting `Mule.app` as a build artifact.
+  The artifact is unsigned; downloading it and opening it locally is on you.
 
 ## Measured behaviour
 

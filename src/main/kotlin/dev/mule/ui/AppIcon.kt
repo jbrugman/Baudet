@@ -9,6 +9,9 @@ import java.awt.geom.AffineTransform
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
+import java.nio.file.Files
+import java.nio.file.Path
+import javax.imageio.ImageIO
 
 /**
  * The application mark: a front-on donkey, the literal face behind the "AI reversed
@@ -46,6 +49,31 @@ object AppIcon {
 
     /** The usual window-manager sizes, largest last, so the OS can pick a sharp one. */
     fun images(): List<Image> = intArrayOf(16, 24, 32, 48, 64, 128, 256, 512).map { render(it) }
+
+    // The exact file names and pixel sizes a macOS .iconset requires; iconutil
+    // refuses a set that is missing or misnamed any of these.
+    private val iconSet = listOf(
+        "icon_16x16.png" to 16, "icon_16x16@2x.png" to 32,
+        "icon_32x32.png" to 32, "icon_32x32@2x.png" to 64,
+        "icon_128x128.png" to 128, "icon_128x128@2x.png" to 256,
+        "icon_256x256.png" to 256, "icon_256x256@2x.png" to 512,
+        "icon_512x512.png" to 512, "icon_512x512@2x.png" to 1024,
+    )
+
+    /**
+     * Render every size a macOS `.iconset` expects and write them as PNGs into
+     * [dir], which is created when missing. The packaging script hands the result
+     * to `iconutil` to build the `.icns`, so the mark is defined in exactly one
+     * place -- here -- instead of a committed bitmap that can drift from the code.
+     */
+    fun writeIconSet(dir: Path): List<Path> {
+        Files.createDirectories(dir)
+        return iconSet.map { (name, size) ->
+            val out = dir.resolve(name)
+            ImageIO.write(render(size), "png", out.toFile())
+            out
+        }
+    }
 
     private fun paint(g: Graphics2D) {
         drawEar(g, left = true)
