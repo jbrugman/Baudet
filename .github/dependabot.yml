@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Weekelijkse Maven-dependency-PR's en GitHub-Actions-PR's, zoals Storyteller.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

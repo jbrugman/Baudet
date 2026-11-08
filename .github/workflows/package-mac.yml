@@ -1,15 +1,20 @@
-name: Package macOS app
+name: Package and release macOS app
 
+# Builds the .app on a macOS runner, uploads it as a build artifact, and -- for a
+# qualifying push to main -- publishes a GitHub Release. The release tag comes from
+# the bundle version stamped from the pom (see make-mac-app.sh), so the tag, the jar
+# and the Info.plist version all agree and a new release only appears when the pom
+# version is bumped (an existing tag is re-uploaded with --clobber).
 on:
   push:
     branches: [ "main" ]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: package-mac-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -26,11 +31,50 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      - name: Release eligibility
+        id: eligibility
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const isDependabot = context.actor === 'dependabot[bot]'
+              || prs.some((pr) => pr.user?.login === 'dependabot[bot]');
+            const hasNoRelease = prs.some((pr) =>
+              pr.head?.ref === 'norelease' || (pr.head?.ref || '').startsWith('norelease/'));
+            const shouldRelease = !isDependabot && !hasNoRelease;
+            core.setOutput('should-release', String(shouldRelease));
+            core.info(shouldRelease ? 'Release is eligible.' : 'Skipping non-release change.');
+
       - name: Build and package the .app
         run: mvn -B clean verify -Pmac-app
 
-      - name: Upload macOS app
+      - name: Upload macOS app artifact
         uses: actions/upload-artifact@v4
         with:
           name: Mule-mac-app
           path: target/dist/
+
+      - name: Publish GitHub release
+        if: steps.eligibility.outputs.should-release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            target/dist/Mule.app/Contents/Info.plist)"
+          TAG="v${VERSION}"
+          ZIP="Mule-${VERSION}-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent target/dist/Mule.app "$ZIP"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; re-uploading $ZIP"
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            echo "Creating release $TAG with $ZIP"
+            gh release create "$TAG" "$ZIP" \
+              --target "${GITHUB_SHA}" \
+              --title "$TAG" \
+              --generate-notes
+          fi
