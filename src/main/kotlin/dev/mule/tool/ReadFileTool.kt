@@ -46,6 +46,8 @@ class ReadFileTool : Tool {
         val resolved = root.resolve(rel).normalize()
         if (!resolved.startsWith(root)) return fail("$rel resolves outside the project folder")
         if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder.${FolderListing.hint(root)}")
+        if (FolderBoundary.realWithin(root, resolved) == null)
+            return fail("$rel resolves outside the folder once links are followed")
 
         val size = runCatching { Files.size(resolved) }.getOrElse { return fail("$rel could not be read") }
         if (size > MAX_FILE_BYTES) return fail("$rel is larger than the ${MAX_FILE_BYTES / 1024} KB read limit")

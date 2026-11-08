@@ -70,6 +70,8 @@ class EditFileTool : Tool {
         val resolved = root.resolve(rel).normalize()
         if (!resolved.startsWith(root)) return fail("$rel resolves outside the project folder")
         if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder.${FolderListing.hint(root)}")
+        if (FolderBoundary.realWithin(root, resolved) == null)
+            return fail("$rel resolves outside the folder once links are followed")
 
         val original = try {
             Files.readString(resolved)
@@ -100,6 +102,14 @@ class EditFileTool : Tool {
                 output = "the user declined the change to $rel; do not retry it, tell the user instead",
                 diff = diff
             )
+        }
+        val current = try {
+            Files.readString(resolved)
+        } catch (_: Exception) {
+            return fail("$rel could not be re-read before writing")
+        }
+        if (current != original) {
+            return fail("$rel changed since the preview; not overwriting a newer edit")
         }
         val undo: () -> Unit = { runCatching { Files.writeString(resolved, original) } }
         return try {
