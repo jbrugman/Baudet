@@ -191,6 +191,28 @@ enum class Key(val en: String, val nl: String) {
         "De rechten die deze app zichzelf geeft op de gekoppelde map. Alleen Lezen wordt nu afgedwongen."
     ),
 
+    // ---- file tree (right panel) -------------------------------------------
+    ToggleFileTree(
+        "Show or hide the project file tree",
+        "Toon of verberg de bestandsboom van het project"
+    ),
+    FileTreeRefreshButton("Refresh", "Vernieuwen"),
+    TipFileTreeRefresh(
+        "Reload the folder listing from disk.",
+        "Herlaadt de mapindeling van de schijf."
+    ),
+    FileTreeHidden("Hidden files", "Verborgen bestanden"),
+    FileTreeNoFolder(
+        "Select a project with a linked folder to see its files.",
+        "Kies een project met een gekoppelde map om de bestanden te zien."
+    ),
+    FileTreeNoRead(
+        "Read access is not granted for this project's folder.",
+        "Leestoegang is niet verleend voor de map van dit project."
+    ),
+    FileTreeEmpty("empty folder", "lege map"),
+    CopyPath("Copy path", "Kopieer pad"),
+
     // ---- startup smoke run -------------------------------------------------
     SmokeDataDir("mule smoke · data-dir={0}", "mule smoke · data-dir={0}"),
     SmokeModelSet("model     = set to '{0}' and saved", "model     = gezet op '{0}' en opgeslagen"),

@@ -45,7 +45,9 @@ class ProjectSidebar(
     private val state: AppState,
     private val onSelectSession: (String) -> Unit,
     private val onAfterDelete: () -> Unit = {},
-    private val onSelectProject: (String?) -> Unit = {}
+    private val onSelectProject: (String?) -> Unit = {},
+    /** Reports the project the selection now implies (null = Unassigned), for the file tree. */
+    private val onSelectionChanged: (String?) -> Unit = {}
 ) : JPanel(BorderLayout()) {
 
     // Rows fill the viewport width, so a right-click anywhere on a line hits it (the blue
@@ -182,6 +184,7 @@ class ProjectSidebar(
             else -> { selectedProjectId = null; selectedSessionId = null; selectedSessionTitle = "" }
         }
         updateDetail()
+        onSelectionChanged(selectedProjectId)
     }
 
     // ---- right-click context menu ---------------------------------------
@@ -197,7 +200,7 @@ class ProjectSidebar(
         refreshing = false
         val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
         recordSelection(node)
-      buildPopup(node).show(tree, e.x, e.y)
+        buildPopup(node).show(tree, e.x, e.y)
         popupShown = true
         e.consume()
     }

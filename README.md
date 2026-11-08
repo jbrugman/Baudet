@@ -13,8 +13,8 @@ It speaks the OpenAI **Responses API** by default, with the Chat Completions
 shape tolerated as a fallback.
 
 It keeps the server-side session: each turn sends `previous_response_id`, so
-the backend carries the context instead of the client resending it. Settings
-and transcripts are persisted locally in an embedded H2 database.
+the backend carries the context instead of the client resending it. Settings, projects and transcripts are persisted locally in an embedded H2
+database.
 
 ## Why it was started
 
@@ -45,7 +45,7 @@ concrete behavior:
 
 The wire layer works; the product around it is a skeleton.
 
-Working, and verified against a real backend:
+Working:
 
 - list models, pick one, save settings
 - streaming chat over `/v1/responses` with a server-side session
@@ -54,13 +54,16 @@ Working, and verified against a real backend:
 - persisted session: the last conversation is restored after a restart
 - client-side compaction
 - UI text in English or Dutch, switchable at runtime (English is the default)
+- projects in a left sidebar, with conversations grouped under them and
+  per-folder read/write/execute grants (only Read is enforced today)
+- a read-only project file tree on the right, following the selected project
 
 Not there yet:
 
 - no tools, no file editing, no git checkpoints, no diff view — so it is not
   yet a coding assistant, only a chat client
 - the GraalVM `native-image` profile is not wired up
-- single session; no session browser, no markdown rendering
+- no markdown rendering; the file tree is read-only, with no editor wired up
 
 ## Stack
 
@@ -120,8 +123,8 @@ runtime. Set `MULE_PKG_TYPE=dmg` to also wrap the `.app` into a `.dmg`.
 
 One honest wrinkle: `jpackage` refuses a version whose major number is `0`, so
 the bundle is built with a placeholder version and the real pre-alpha version
-(currently `0.1.0`) is written back into `Info.plist`. The shipped `.app`
-therefore reports `0.1.0` in Finder, not the placeholder it was built from.
+from the pom is written back into `Info.plist`. The shipped `.app` therefore
+reports that pom version in Finder, not the placeholder it was built from.
 
 The bundle is **ad-hoc signed** but carries no Apple Developer ID, so a copy
 downloaded from another machine is blocked by Gatekeeper until it is re-signed with
@@ -142,7 +145,7 @@ specific to the Finder/`open` path (running the jar directly dodges them):
   directory is now an absolute per-user path (see *Build and run*), so the store
   opens however the app is launched.
 
-What is measured here: the bundle builds, `Info.plist` carries `0.1.0`, and
+What is measured here: the bundle builds, `Info.plist` carries the stamped pom version, and
 `codesign --verify` passes on the re-signed bundle; forcing cwd `/` reproduced the
 store-open failure and clears it after the fix. The graphical window opening on a
 real desktop session is the last step and has not been captured headlessly.
@@ -177,6 +180,10 @@ GitHub Actions, in `.github/workflows/`:
 - `package-mac.yml` -- on push to `main`: build on `macos-latest`, run the same
   `mac-app` packaging, and upload the resulting `Mule.app` as a build artifact.
   The artifact is unsigned; downloading it and opening it locally is on you.
+  A qualifying push also publishes a GitHub Release carrying two assets:
+  `Mule-<version>-macos.zip` (the ad-hoc-signed `.app`) and `Mule-<version>.jar`
+  (the runnable shaded jar -- the portable artifact that runs on any JVM, since
+  the `.app` is not notarized and Gatekeeper blocks it on another Mac).
 
 ## Measured behavior
 

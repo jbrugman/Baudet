@@ -8,6 +8,7 @@ import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.ui.AppIcon
 import dev.mule.ui.ChatPanel
+import dev.mule.ui.FileTreePanel
 import dev.mule.ui.ProjectSidebar
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
@@ -91,41 +92,41 @@ private fun show(state: AppState, frame: JFrame) {
     // of its tabs (Settings holds a wide multi-line field), which is what clamped the divider.
     tabs.minimumSize = Dimension(0, 0)
 
+    // The file tree follows the project of whatever the sidebar selects; declared before the
+    // sidebar so the selection callback can point straight at it.
+    val files = FileTreePanel(state).apply { minimumSize = Dimension(0, 0) }
+
     val sidebar = ProjectSidebar(
         state,
         onSelectSession = { sessionId -> chat.loadSession(sessionId) },
         onAfterDelete = { chat.refresh() },
-        onSelectProject = { projectId -> chat.startProjectChat(projectId) }
-    ).apply { minimumSize = Dimension(0, 0) } // fully hideable via the divider's one-touch arrow
+        onSelectProject = { projectId -> chat.startProjectChat(projectId) },
+        onSelectionChanged = { projectId -> files.showProject(projectId) }
+    ).apply { minimumSize = Dimension(0, 0) } // fully hideable via its toolbar toggle
     // A new or updated conversation in the chat must appear in the tree immediately.
     chat.onSessionsChanged = { sidebar.reload() }
 
-    val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
+    // Two splits, three panels: [sidebar | tabs] on the left, those as a whole beside the
+    // file tree. Each toolbar toggle owns one divider, so either side panel collapses on its own.
+    val left = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
         dividerLocation = 280
         resizeWeight = 0.2
         isContinuousLayout = true
         isOneTouchExpandable = false   // replaced by the toolbar toggle, which stays put when collapsed
     }
-
-    // The toggle lives in the frame, not the sidebar, so it survives a collapse and can bring
-    // the panel back: divider 0 hides it fully, the remembered width restores it.
-    var expandedWidth = split.dividerLocation
-    val toggle = JButton(SidebarToggleIcon()).apply {
-        toolTipText = Texts[Key.ToggleSidebar]
-        isFocusable = false
-        margin = Insets(4, 6, 4, 6)
-        addActionListener {
-            if (split.dividerLocation > 0) {
-                expandedWidth = split.dividerLocation
-                split.dividerLocation = 0
-            } else {
-                split.dividerLocation = expandedWidth
-            }
-        }
+    val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, files).apply {
+        dividerLocation = 720
+        resizeWeight = 1.0             // the file tree keeps its width; the chat absorbs resizing
+        isContinuousLayout = true
+        isOneTouchExpandable = false
     }
+
+    // Both toggles live in the frame, not their panel, so they survive a collapse and can bring
+    // the panel back at its remembered width: the left one hides at 0, the right one at the far end.
     val toolbar = JPanel(BorderLayout()).apply {
         border = BorderFactory.createEmptyBorder(4, 4, 0, 4)
-        add(toggle, BorderLayout.WEST)
+        add(sidebarToggle(left, left.dividerLocation, Key.ToggleSidebar, rightSide = false), BorderLayout.WEST)
+        add(sidebarToggle(split, split.dividerLocation, Key.ToggleFileTree, rightSide = true), BorderLayout.EAST)
     }
     val root = JPanel(BorderLayout())
     root.add(toolbar, BorderLayout.NORTH)
@@ -136,6 +137,35 @@ private fun show(state: AppState, frame: JFrame) {
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
+}
+
+/**
+ * A frame-level toggle that hides one side of a split pane completely and brings it back at
+ * its remembered width. A left panel hides at divider 0; a right panel hides at the far end,
+ * so both directions share one remembered-width toggle.
+ */
+private fun sidebarToggle(
+    split: JSplitPane,
+    expandedWidth: Int,
+    tipKey: Key,
+    rightSide: Boolean
+): JButton {
+    var shown = expandedWidth
+    var hidden = false
+    return JButton(SidebarToggleIcon(rightSide = rightSide)).apply {
+        toolTipText = Texts[tipKey]
+        isFocusable = false
+        margin = Insets(4, 6, 4, 6)
+        addActionListener {
+            if (!hidden) {
+                shown = split.dividerLocation
+                split.dividerLocation = if (rightSide) Int.MAX_VALUE else 0
+            } else {
+                split.dividerLocation = shown
+            }
+            hidden = !hidden
+        }
+    }
 }
 
 /**

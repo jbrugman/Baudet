@@ -6,12 +6,17 @@ import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import java.awt.BorderLayout
 import java.awt.Color
+import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Insets
 import java.awt.event.ActionEvent
 import javax.swing.AbstractAction
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JTextArea
+import javax.swing.JTextField
 import javax.swing.JTextPane
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
@@ -36,17 +41,17 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val pane = JTextPane(doc).apply {
         isEditable = false
         font = Font(Font.MONOSPACED, Font.PLAIN, 13)
-        margin = java.awt.Insets(8, 8, 8, 8)
+        margin = Insets(8, 8, 8, 8)
     }
-    private val scroll = JScrollPane(pane).apply { minimumSize = java.awt.Dimension(0, 0) }
+    private val scroll = JScrollPane(pane).apply { minimumSize = Dimension(0, 0) }
 
-    private val input = javax.swing.JTextArea(4, 60).apply {
+    private val input = JTextArea(4, 60).apply {
         font = Font(Font.MONOSPACED, Font.PLAIN, 13)
         lineWrap = true
         wrapStyleWord = true
     }
     private val sendButton = JButton(Texts[Key.SendButton])
-    private val status = javax.swing.JTextField(" ").apply { isEditable = false; minimumSize = java.awt.Dimension(0, 0) }
+    private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
 
     private val normal = SimpleAttributeSet().apply {
         StyleConstants.setFontFamily(this, Font.MONOSPACED)
@@ -69,7 +74,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     var onSessionsChanged: () -> Unit = {}
 
     init {
-        val buttons = JPanel(WrapLayout(java.awt.FlowLayout.LEFT, 4, 0))
+        val buttons = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
         buttons.add(sendButton)
         buttons.add(JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } })
         buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
@@ -78,7 +83,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // width at whatever this column refuses to give up: WrapLayout lets the toolbar
         // wrap, and the scroll/status fields drop their default (== preferred) minimum,
         // so a narrow chat no longer holds the divider hostage.
-        val inputScroll = JScrollPane(input).apply { minimumSize = java.awt.Dimension(0, 0) }
+        val inputScroll = JScrollPane(input).apply { minimumSize = Dimension(0, 0) }
         val south = JPanel(BorderLayout())
         south.add(buttons, BorderLayout.NORTH)
         south.add(inputScroll, BorderLayout.CENTER)
