@@ -216,6 +216,10 @@ Most of this code was written by an AI coding assistant (OpenAI Codex) driving
 the local model **Qwen3.8-Flash-Next-oQ4e-mtp** served by oMLX, under human
 direction and review. Per-line attribution is not available, so this is stated
 at project level rather than per file.
+What matters here is the model behind it: every model call went to a local
+model over oMLX, a local serving platform that runs on your own machine rather
+than in the cloud. I wanted to prove that a local model can be used to write a
+useful program; this project is the result of that experiment.
 
 Claims labeled "Measured" or "verified" above were obtained by running against
 the backend, not inferred from documentation — including one initial diagnosis
