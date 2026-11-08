@@ -5,7 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Reads one directory level of a project folder. It is deliberately side-effect free
+ * Reads one directory level of a project folder. It is deliberately side effect free
  * apart from the listing itself, so it can be tested against a temporary tree without
  * the UI. Ordering is deterministic -- directories first, then files, each group
  * alphabetical and case-insensitive -- which keeps the tree stable across refreshes.

@@ -11,6 +11,8 @@ object Texts {
     operator fun get(k: Key): String = when (language) {
         Language.EN -> k.en
         Language.NL -> k.nl
+        Language.FR -> k.fr
+        Language.DE -> k.de
     }
 
     /** Substitutes {0}, {1}, ... in the active language. */
@@ -22,5 +24,10 @@ object Texts {
 
     /** Anything unrecognized falls back to English rather than failing. */
     fun parse(stored: String): Language =
-        if (stored.trim().equals("nl", ignoreCase = true)) Language.NL else Language.EN
+        when (stored.trim().lowercase()) {
+            "nl" -> Language.NL
+            "fr" -> Language.FR
+            "de" -> Language.DE
+            else -> Language.EN
+        }
 }
