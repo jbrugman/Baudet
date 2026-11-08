@@ -11,8 +11,9 @@ import java.util.concurrent.TimeUnit
  * /usr/bin. Every call is bounded: a repository that hangs or a git that is missing yields
  * null, and the caller degrades to no colors and an empty diff rather than blocking the UI.
  * core.quotePath is forced off so paths stay readable. git status runs inside the folder and
- * is scoped to it with a dot pathspec, so its paths come back relative to that folder and line
- * up with the tree, which shows names relative to the project folder.
+ * is scoped to it with a dot pathspec; because porcelain still prints paths relative to the
+ * repository root, the subfolder prefix is stripped so keys line up with the tree, which shows
+ * names relative to the project folder.
  */
 class GitInspector {
 
@@ -22,7 +23,12 @@ class GitInspector {
         if (!insideWorkTree) return GitStatus.NOT_A_REPO
         val out = exec(root, "-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall", "--", ".")
             ?: return GitStatus(true, emptyMap())
-        return GitStatus(true, GitStatus.parsePorcelain(out))
+        // Porcelain prints paths relative to the repository root even inside a subfolder, while
+        // the tree keys by paths relative to the project folder. Relative-path output is not a
+        // status option in every git, so the subfolder prefix comes from show-prefix and is
+        // stripped here; it is empty at the repository root, so nothing changes there.
+        val prefix = exec(root, "rev-parse", "--show-prefix")?.trim().orEmpty()
+        return GitStatus(true, GitStatus.parsePorcelain(out, prefix))
     }
 
     /**

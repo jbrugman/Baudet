@@ -29,15 +29,18 @@ class GitStatus(val isRepository: Boolean, private val byPath: Map<String, FileC
          * Parses the output of [git status --porcelain=v1](https://git-scm.com/docs/git-status) into
          * the coarse buckets. Each line is two status letters, a space, then the path; a rename reads
          * as OLD -> NEW and is stored under NEW. Quoted paths, which git uses for names with odd
-         * characters, are unquoted. Lines too short to hold a status and a path are dropped.
+         * characters, are unquoted. Lines too short to hold a status and a path are dropped. When
+         * [prefix] is non-empty it is stripped from the front of each path, so a project folder that
+         * is a repository subdirectory still keys by paths relative to that folder.
          */
-        fun parsePorcelain(text: String): Map<String, FileChange> {
+        fun parsePorcelain(text: String, prefix: String = ""): Map<String, FileChange> {
             val result = LinkedHashMap<String, FileChange>()
             for (line in text.lineSequence()) {
                 if (line.length < 4) continue
                 var path = line.substring(3)
                 if (" -> " in path) path = path.substringAfter(" -> ")
                 path = unquote(path)
+                if (prefix.isNotEmpty() && path.startsWith(prefix)) path = path.removePrefix(prefix)
                 if (path.isEmpty()) continue
                 result[path] = category(line[0], line[1])
             }

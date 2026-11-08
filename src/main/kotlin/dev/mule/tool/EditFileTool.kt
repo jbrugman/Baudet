@@ -103,17 +103,20 @@ class EditFileTool : Tool {
                 diff = diff
             )
         }
+        val root = ctx.root ?: return fail("no project folder is linked to write into")
+        val safe = FolderBoundary.realWithin(root, resolved)
+            ?: return fail("$rel resolves outside the folder once links are followed")
         val current = try {
-            Files.readString(resolved)
+            Files.readString(safe)
         } catch (_: Exception) {
             return fail("$rel could not be re-read before writing")
         }
         if (current != original) {
             return fail("$rel changed since the preview; not overwriting a newer edit")
         }
-        val undo: () -> Unit = { runCatching { Files.writeString(resolved, original) } }
+        val undo: () -> Unit = { runCatching { Files.writeString(safe, original) } }
         return try {
-            Files.writeString(resolved, updated)
+            Files.writeString(safe, updated)
             ToolResult(ok = true, output = "wrote $rel", diff = diff, undo = undo)
         } catch (e: Exception) {
             fail("writing $rel failed: ${e.message}")

@@ -65,4 +65,16 @@ class GitStatusSpec : BehaviorSpec({
             status.deletedUnder("") shouldContainExactly listOf("top.txt")
         }
     }
+
+    given("porcelain paths carrying a subfolder prefix for a repository subdirectory") {
+        val m = GitStatus.parsePorcelain(" M sub/a.kt\n?? sub/deep/new.txt", prefix = "sub/")
+        then("keys are relative to the project folder, not the repository root") {
+            m["a.kt"] shouldBe FileChange.Modified
+            m["sub/a.kt"] shouldBe null
+            m["deep/new.txt"] shouldBe FileChange.Untracked
+        }
+        then("an empty prefix leaves repository-root keys untouched") {
+            GitStatus.parsePorcelain(" M top.txt")["top.txt"] shouldBe FileChange.Modified
+        }
+    }
 })

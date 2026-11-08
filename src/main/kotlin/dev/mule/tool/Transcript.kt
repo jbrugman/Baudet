@@ -28,4 +28,23 @@ object Transcript {
             .map { it.copy(content = scrub(it.content)) }
         return prior to userText
     }
+
+    /**
+     * The current input for one backend call. Without a server session the newest message
+     * alone is the input and the rest replays. With a server session the backend already
+     * holds everything up to the last assistant turn, so the input is every message the loop
+     * appended since then -- usually several tool observations from one model turn -- joined so
+     * none is dropped; before any assistant turn the newest stands alone.
+     */
+    fun currentInput(history: List<Msg>, underServerSession: Boolean): String {
+        if (!underServerSession) return scrub(history.lastOrNull()?.content ?: "")
+        val lastAssistant = history.indexOfLast { it.role == "assistant" }
+        val tail = when {
+            lastAssistant >= 0 -> history.subList(lastAssistant + 1, history.size)
+            history.isNotEmpty() -> listOf(history.last())
+            else -> emptyList()
+        }
+        val joined = tail.joinToString("\n\n") { scrub(it.content) }
+        return joined.ifBlank { scrub(history.lastOrNull()?.content ?: "") }
+    }
 }

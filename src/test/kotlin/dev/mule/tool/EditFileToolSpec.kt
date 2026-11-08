@@ -152,4 +152,41 @@ class EditFileToolSpec : BehaviorSpec({
         }
     }
 
+    given("a file replaced by a symlink to outside while the preview is approved") {
+        val root = newRoot("mule-edit-symlink")
+        val target = root.resolve("a.txt")
+        val outsideDir = newRoot("mule-edit-symlink-out")
+        val outside = outsideDir.resolve("evil.txt")
+        val probe = newRoot("mule-edit-symlink-probe")
+        val supportsLinks = runCatching {
+            Files.writeString(probe.resolve("f"), "f")
+            Files.createSymbolicLink(probe.resolve("l"), probe.resolve("f"))
+        }.isSuccess
+        Files.writeString(target, "one\n")
+        Files.writeString(outside, "one\n")
+        val ctx = ToolContext(
+            root,
+            writeGranted = true,
+            approve = { _, _ ->
+                runCatching {
+                    Files.delete(target)
+                    Files.createSymbolicLink(target, outside)
+                }
+                true
+            }
+        )
+        `when`("approval turns the file into a link toward the outside file") {
+            then("the boundary holds at the write and the outside file is left intact") {
+                // Symbolic links are not permitted everywhere (e.g. Windows CI); skip there.
+                if (!supportsLinks) {
+                    true shouldBe true
+                } else {
+                    val result = tool.execute(args("a.txt", Triple("one", "two", false)), ctx)
+                    result.ok shouldBe false
+                    Files.readString(outside) shouldBe "one\n"
+                }
+            }
+        }
+    }
+
 })

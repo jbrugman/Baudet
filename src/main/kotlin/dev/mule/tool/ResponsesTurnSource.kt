@@ -24,7 +24,8 @@ class ResponsesTurnSource(
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
-        val (prior, userText) = Transcript.forCall(history)
+        val (prior, _) = Transcript.forCall(history)
+        val userText = Transcript.currentInput(history, previousResponseId != null)
         return client.turn(system, prior, userText, previousResponseId, tools, onDelta, onReasoning)
     }
 }
