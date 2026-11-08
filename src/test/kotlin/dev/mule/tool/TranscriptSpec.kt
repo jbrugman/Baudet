@@ -6,9 +6,10 @@ import io.kotest.matchers.shouldBe
 
 /**
  * The transcript is what leaves toward the backend and, through replayed history, what
- * a chat-tuned model can imitate. A leaked control token must never survive into either,
- * and the assistant turns must not be replayed: with previous_response_id off the backend
- * still needs the human text, and re-feeding the assistant only re-feeds its own leakage.
+ * a chat-tuned model can imitate. A leaked control token must never survive into either.
+ * Every prior turn is replayed now, assistant turns included, so a run keeps its working
+ * context when previous_response_id is off; scrubbing covers all of them, so replaying
+ * the assistant cannot re-feed the leakage.
  * The token is written as code points so this source never holds the literal it removes.
  */
 class TranscriptSpec : BehaviorSpec({
@@ -31,9 +32,9 @@ class TranscriptSpec : BehaviorSpec({
         )
         `when`("preparing one backend call") {
             val (prior, userText) = Transcript.forCall(history)
-            then("only prior user turns are replayed, never the assistant") {
-                prior.map { it.role } shouldBe listOf("user")
-                prior[0].content shouldBe "first"
+            then("every prior turn is replayed, assistant included, each scrubbed") {
+                prior.map { it.role } shouldBe listOf("user", "assistant")
+                prior.map { it.content } shouldBe listOf("first", "answer")
             }
             then("the newest message is the current user input") {
                 userText shouldBe "second"

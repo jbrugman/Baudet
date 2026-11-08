@@ -6,9 +6,9 @@ import dev.mule.session.Msg
  * Prepares a running transcript for one backend call. The newest message is the current
  * input; what is replayed before it is scrubbed so that the control tokens a chat-tuned
  * model sometimes leaks can never be imitated from history and never reach the panel.
- * Only prior user messages are replayed, never the assistant's own turns: with
- * previous_response_id off the backend still needs the human text, and replaying the
- * assistant turns again only re-feeds the very leakage this stops.
+ * Every prior turn is replayed, assistant turns included, so a run keeps its working
+ * context when previous_response_id is off; scrubbing covers assistant text too, so
+ * replaying it cannot re-feed the leakage this stops.
  */
 object Transcript {
 
@@ -25,7 +25,6 @@ object Transcript {
     fun forCall(history: List<Msg>): Pair<List<Msg>, String> {
         val userText = scrub(history.lastOrNull()?.content ?: "")
         val prior = history.dropLast(1)
-            .filter { it.role == "user" }
             .map { it.copy(content = scrub(it.content)) }
         return prior to userText
     }
