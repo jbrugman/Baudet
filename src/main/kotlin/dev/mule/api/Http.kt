@@ -13,7 +13,7 @@ import java.util.stream.Collectors
 import kotlin.streams.asSequence
 
 class BackendException(status: Int, message: String) :
-    RuntimeException(Texts.fmt(Key.httpFromBackend, status, message))
+    RuntimeException(Texts.fmt(Key.HttpFromBackend, status, message))
 
 /**
  * One SSE event: the optional event: field plus the joined data payload.

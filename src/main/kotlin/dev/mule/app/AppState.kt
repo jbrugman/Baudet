@@ -115,7 +115,7 @@ class AppState(val store: H2Store) {
         val budget = config.contextBudgetTokens
         val pct = if (budget <= 0) 0 else (used * 100 / budget)
         return "~${used} / $budget tokens (${pct}%)" +
-            if (pct > 80) Texts[Key.compactRecommended] else ""
+            if (pct > 80) Texts[Key.CompactRecommended] else ""
     }
 
     companion object {

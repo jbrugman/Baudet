@@ -6,7 +6,6 @@ import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import java.awt.BorderLayout
 import java.awt.Font
-import java.awt.Insets
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
 import javax.swing.JButton
@@ -28,8 +27,8 @@ class ModelsPanel(private val state: AppState, private val onPicked: (String) ->
 
     init {
         val bar = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
-        bar.add(JButton(Texts[Key.fetchModels]).apply { addActionListener { refresh() } })
-        bar.add(JButton(Texts[Key.useThisModel]).apply { addActionListener { pick() } })
+        bar.add(JButton(Texts[Key.FetchModels]).apply { addActionListener { refresh() } })
+        bar.add(JButton(Texts[Key.UseThisModel]).apply { addActionListener { pick() } })
         add(bar, BorderLayout.NORTH)
         add(JScrollPane(list), BorderLayout.CENTER)
         status.isEditable = false
@@ -38,18 +37,18 @@ class ModelsPanel(private val state: AppState, private val onPicked: (String) ->
     }
 
     fun refresh() {
-        status.text = Texts[Key.fetching]
+        status.text = Texts[Key.Fetching]
         Thread {
             val result = try {
                 ModelsClient.fetch(state.config)
             } catch (e: Exception) {
-                SwingUtilities.invokeLater { status.text = Texts.fmt(Key.failedPrefix, e.message ?: "?") }
+                SwingUtilities.invokeLater { status.text = Texts.fmt(Key.FailedPrefix, e.message ?: "?") }
                 return@Thread
             }
             SwingUtilities.invokeLater {
                 model.clear()
                 result.forEach { model.addElement(it.id) }
-                status.text = Texts.fmt(Key.modelsListed, result.size, state.config.baseUrl)
+                status.text = Texts.fmt(Key.ModelsListed, result.size, state.config.baseUrl)
                 val cur = state.config.model
                 if (cur.isNotBlank()) {
                     val i = result.indexOfFirst { it.id == cur }
@@ -60,9 +59,9 @@ class ModelsPanel(private val state: AppState, private val onPicked: (String) ->
     }
 
     private fun pick() {
-        val sel = list.selectedValue ?: run { status.text = Texts[Key.pickFirst]; return }
+        val sel = list.selectedValue ?: run { status.text = Texts[Key.PickFirst]; return }
         state.saveConfig(state.config.copy(model = sel))
-        status.text = Texts.fmt(Key.modelSaved, sel)
+        status.text = Texts.fmt(Key.ModelSaved, sel)
         onPicked(sel)
     }
 }

@@ -76,9 +76,9 @@ private fun show(state: AppState, frame: JFrame) {
     }
 
     val tabs = JTabbedPane()
-    tabs.addTab(Texts[Key.tabChat], chat)
-    tabs.addTab(Texts[Key.tabModels], models)
-    tabs.addTab(Texts[Key.tabSettings], settings)
+    tabs.addTab(Texts[Key.TabChat], chat)
+    tabs.addTab(Texts[Key.TabModels], models)
+    tabs.addTab(Texts[Key.TabSettings], settings)
 
     frame.contentPane = tabs
     chat.refresh()
@@ -107,28 +107,28 @@ private fun exportIcons(dir: String): Int {
 }
 
 private fun smoke(state: AppState, args: Array<String>): Int {
-    println(Texts.fmt(Key.smokeDataDir, AppState.dataDir().toAbsolutePath().toString()))
+    println(Texts.fmt(Key.SmokeDataDir, AppState.dataDir().toAbsolutePath().toString()))
 
     // --model=<id> makes the smoke run scriptable for a specific model
     val wanted = args.firstOrNull { it.startsWith("--model=") }?.substringAfter('=')?.ifBlank { null }
     if (wanted != null) {
         state.saveConfig(state.config.copy(model = wanted))
-        println(Texts.fmt(Key.smokeModelSet, wanted))
+        println(Texts.fmt(Key.SmokeModelSet, wanted))
     }
 
     val cfg = state.config
     println("base      = ${cfg.baseUrl}")
-    println(Texts[Key.smokeKeyLabel] + if (cfg.hasKey()) Texts[Key.keyPresent] else Texts[Key.keyMissing])
+    println(Texts[Key.SmokeKeyLabel] + if (cfg.hasKey()) Texts[Key.KeyPresent] else Texts[Key.KeyMissing])
     println("model     = '${cfg.model}'")
-    println(Texts.fmt(Key.smokeSession, state.session.sessionId, state.session.messages.size))
+    println(Texts.fmt(Key.SmokeSession, state.session.sessionId, state.session.messages.size))
 
     val models = try {
         ModelsClient.fetch(cfg)
     } catch (e: Exception) {
-        println(Texts.fmt(Key.smokeModelsFailed, e.message ?: "?"))
+        println(Texts.fmt(Key.SmokeModelsFailed, e.message ?: "?"))
         return 1
     }
-    println(Texts.fmt(Key.smokeModels, models.size))
+    println(Texts.fmt(Key.SmokeModels, models.size))
     models.take(30).forEach { println("   - ${it.id}") }
     if (models.isEmpty()) return 1
 

@@ -31,7 +31,7 @@ class TextsSpec : BehaviorSpec({
         `when`("nothing chose a language") {
             then("the UI reads English") {
                 Texts.language shouldBe Language.EN
-                Texts[Key.saveButton] shouldBe "Save"
+                Texts[Key.SaveButton] shouldBe "Save"
             }
         }
     }
@@ -40,14 +40,14 @@ class TextsSpec : BehaviorSpec({
         `when`("reading a string") {
             Texts.language = Language.NL
             then("the same key yields the Dutch text") {
-                Texts[Key.saveButton] shouldBe "Opslaan"
+                Texts[Key.SaveButton] shouldBe "Opslaan"
             }
         }
         `when`("switching back") {
             Texts.language = Language.NL
             Texts.language = Language.EN
             then("the English text returns") {
-                Texts[Key.saveButton] shouldBe "Save"
+                Texts[Key.SaveButton] shouldBe "Save"
             }
         }
     }
@@ -55,16 +55,16 @@ class TextsSpec : BehaviorSpec({
     given("a string with placeholders") {
         `when`("formatted") {
             then("arguments land in position") {
-                Texts.fmt(Key.modelsListed, 3, "http://h:1/v1") shouldBe "3 models via http://h:1/v1"
+                Texts.fmt(Key.ModelsListed, 3, "http://h:1/v1") shouldBe "3 models via http://h:1/v1"
             }
             then("the Dutch form is used in Dutch") {
                 Texts.language = Language.NL
-                Texts.fmt(Key.modelsListed, 3, "http://h:1/v1") shouldBe "3 modellen via http://h:1/v1"
+                Texts.fmt(Key.ModelsListed, 3, "http://h:1/v1") shouldBe "3 modellen via http://h:1/v1"
             }
             then("a placeholder that is part of the text is left alone") {
                 // probeReread carries a literal {id} naming an API path segment
-                Texts.fmt(Key.probeReread, 200) shouldContain "{id}"
-                Texts.fmt(Key.probeReread, 200) shouldContain "HTTP 200"
+                Texts.fmt(Key.ProbeReread, 200) shouldContain "{id}"
+                Texts.fmt(Key.ProbeReread, 200) shouldContain "HTTP 200"
             }
         }
     }

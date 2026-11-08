@@ -31,9 +31,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val topP = JTextField(8)
     private val reasoning = JComboBox(arrayOf("", "minimal", "low", "medium", "high"))
     private val language = JComboBox(arrayOf("English", "Nederlands"))
-    private val useResponses = JCheckBox(Texts[Key.useResponsesApi])
-    private val storeResp = JCheckBox(Texts[Key.storeResponses])
-    private val useServerSession = JCheckBox(Texts[Key.sendPreviousResponseId])
+    private val useResponses = JCheckBox(Texts[Key.UseResponsesApi])
+    private val storeResp = JCheckBox(Texts[Key.StoreResponses])
+    private val useServerSession = JCheckBox(Texts[Key.SendPreviousResponseId])
     private val systemPrompt = JTextArea(5, 34).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -47,30 +47,30 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val status = JTextField(" ")
 
     init {
-        language.toolTipText = Texts[Key.tipLanguage]
+        language.toolTipText = Texts[Key.TipLanguage]
         val form = formPanel(
             listOf(
-                Texts[Key.languageLabel] to language,
-                Texts[Key.baseUrlLabel] to baseUrl,
-                Texts[Key.apiKeyLabel] to apiKey,
-                Texts[Key.orEnvVar] to envVar,
-                Texts[Key.modelLabel] to model,
-                Texts[Key.maxTokensLabel] to maxTokens,
-                Texts[Key.contextBudgetLabel] to contextBudget,
-                Texts[Key.temperatureLabel] to temperature,
-                Texts[Key.topPLabel] to topP,
-                Texts[Key.reasoningEffortLabel] to reasoning,
+                Texts[Key.LanguageLabel] to language,
+                Texts[Key.BaseUrlLabel] to baseUrl,
+                Texts[Key.ApiKeyLabel] to apiKey,
+                Texts[Key.OrEnvVar] to envVar,
+                Texts[Key.ModelLabel] to model,
+                Texts[Key.MaxTokensLabel] to maxTokens,
+                Texts[Key.ContextBudgetLabel] to contextBudget,
+                Texts[Key.TemperatureLabel] to temperature,
+                Texts[Key.TopPLabel] to topP,
+                Texts[Key.ReasoningEffortLabel] to reasoning,
                 "" to useResponses,
                 "" to storeResp,
                 "" to useServerSession,
-                Texts[Key.systemPromptLabel] to systemPrompt
+                Texts[Key.SystemPromptLabel] to systemPrompt
             )
         )
 
         val buttons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
-        buttons.add(JButton(Texts[Key.saveButton]).apply { toolTipText = Texts[Key.tipSave]; addActionListener { save() } })
-        buttons.add(JButton(Texts[Key.testButton]).apply { toolTipText = Texts[Key.tipTest]; addActionListener { test() } })
-        buttons.add(JButton(Texts[Key.reloadButton]).apply { toolTipText = Texts[Key.tipReload]; addActionListener { reload() } })
+        buttons.add(JButton(Texts[Key.SaveButton]).apply { toolTipText = Texts[Key.TipSave]; addActionListener { save() } })
+        buttons.add(JButton(Texts[Key.TestButton]).apply { toolTipText = Texts[Key.TipTest]; addActionListener { test() } })
+        buttons.add(JButton(Texts[Key.ReloadButton]).apply { toolTipText = Texts[Key.TipReload]; addActionListener { reload() } })
 
         val north = JPanel(BorderLayout())
         north.add(form, BorderLayout.NORTH)
@@ -79,7 +79,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         add(north, BorderLayout.NORTH)
         add(
             javax.swing.JScrollPane(probeOut).apply {
-                border = BorderFactory.createTitledBorder(Texts[Key.diagnostics])
+                border = BorderFactory.createTitledBorder(Texts[Key.Diagnostics])
             },
             BorderLayout.CENTER
         )
@@ -110,7 +110,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         systemPrompt.text = c.systemPrompt
         language.selectedIndex = if (Texts.parse(c.language) == Language.NL) 1 else 0
         status.foreground = Color(160, 160, 160)
-        status.text = Texts.fmt(Key.loadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
+        status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
     }
 
     private fun fail(m: String) {
@@ -120,19 +120,19 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private fun collect(): AppConfig? {
         val mt = maxTokens.text.trim().toIntOrNull()
-        if (mt == null || mt <= 0) { fail(Texts[Key.errMaxTokens]); return null }
+        if (mt == null || mt <= 0) { fail(Texts[Key.ErrMaxTokens]); return null }
         val cb = contextBudget.text.trim().toIntOrNull()
-        if (cb == null || cb <= 0) { fail(Texts[Key.errContextBudget]); return null }
+        if (cb == null || cb <= 0) { fail(Texts[Key.ErrContextBudget]); return null }
         val temp = temperature.text.trim().toDoubleOrNull()
-        if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.errTemperature]); return null }
+        if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.ErrTemperature]); return null }
         val tp = topP.text.trim()
         val tpVal = if (tp.isBlank()) null else tp.toDoubleOrNull()
         if (tp.isNotBlank() && (tpVal == null || tpVal <= 0.0 || tpVal > 1.0)) {
-            fail(Texts[Key.errTopP]); return null
+            fail(Texts[Key.ErrTopP]); return null
         }
         val url = baseUrl.text.trim().trimEnd('/')
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            fail(Texts[Key.errBaseUrl]); return null
+            fail(Texts[Key.ErrBaseUrl]); return null
         }
         return state.config.copy(
             language = if (language.selectedIndex == 1) "nl" else "en",
@@ -156,7 +156,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val next = collect() ?: return false
         state.saveConfig(next)
         status.foreground = Color(120, 200, 130)
-        status.text = Texts.fmt(Key.savedToDisk, next.model)
+        status.text = Texts.fmt(Key.SavedToDisk, next.model)
         return true
     }
 
@@ -164,7 +164,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val next = collect() ?: return
         state.saveConfig(next)
         status.foreground = Color(160, 160, 160)
-        status.text = Texts[Key.testingProbe]
+        status.text = Texts[Key.TestingProbe]
         probeOut.text = ""
         Thread {
             try {
@@ -176,10 +176,10 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 }
                 SwingUtilities.invokeLater {
                     status.foreground = Color(120, 200, 130)
-                    status.text = Texts[Key.diagnosticsDone]
+                    status.text = Texts[Key.DiagnosticsDone]
                 }
             } catch (e: Exception) {
-                SwingUtilities.invokeLater { fail(Texts.fmt(Key.testFailed, e.message ?: "?")) }
+                SwingUtilities.invokeLater { fail(Texts.fmt(Key.TestFailed, e.message ?: "?")) }
             }
         }.start()
     }

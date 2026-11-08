@@ -19,18 +19,18 @@ class CapabilityProbe {
         }
 
         line("base-url  : ${cfg.baseUrl}")
-        line("key       : " + if (cfg.hasKey()) Texts[Key.keyPresent] else Texts[Key.keyMissing])
+        line("key       : " + if (cfg.hasKey()) Texts[Key.KeyPresent] else Texts[Key.KeyMissing])
 
         val models = try {
             ModelsClient.fetch(cfg)
         } catch (e: Exception) {
-            line("models    : " + Texts.fmt(Key.failedPrefix, e.message ?: "?"))
+            line("models    : " + Texts.fmt(Key.FailedPrefix, e.message ?: "?"))
             return out
         }
-        line("models    : " + Texts.fmt(Key.probeAvailable, models.size))
+        line("models    : " + Texts.fmt(Key.ProbeAvailable, models.size))
         val probeModel = cfg.model.ifBlank { models.first().id }
         if (models.none { it.id == cfg.model } && cfg.model.isNotBlank()) {
-            line("note      : " + Texts.fmt(Key.probeModelNotListed, cfg.model))
+            line("note      : " + Texts.fmt(Key.ProbeModelNotListed, cfg.model))
         }
         line("probe     : $probeModel")
 
@@ -44,10 +44,10 @@ class CapabilityProbe {
             )
             line("answer 1  : ${(first.text.take(60)).replace("\n", " ")}")
             line("reasoning1: ${(first.reasoning.take(60)).replace("\n", " ")}")
-            line("truncated : ${first.incompleteReason ?: Texts[Key.probeTruncationNone]}")
+            line("truncated : ${first.incompleteReason ?: Texts[Key.ProbeTruncationNone]}")
             val id = first.responseId
             if (id == null) {
-                line("turn 1    : " + Texts[Key.probeNoResponseId])
+                line("turn 1    : " + Texts[Key.ProbeNoResponseId])
                 return out
             }
             line("turn 1    : id=$id prompt=${first.usage?.prompt} completion=${first.usage?.completion}")
@@ -57,7 +57,7 @@ class CapabilityProbe {
             first.samples.forEach { (k, v) -> line("  wire[$k] $v") }
 
             val (st, body) = Http(small).get("/responses/$id")
-            line("reread    : " + Texts.fmt(Key.probeReread, st) +
+            line("reread    : " + Texts.fmt(Key.ProbeReread, st) +
                 (if (st >= 400) " (body: ${body.take(120)})" else ""))
 
             val second = client.turn(
@@ -73,12 +73,12 @@ class CapabilityProbe {
             line("turn 2    : prompt=${p2} completion=${second.usage?.completion}")
             if (p1 != null && p2 != null) {
                 line(
-                    if (p2 > p1) "verdict   : " + Texts.fmt(Key.probeHonored, p1, p2)
-                    else "verdict   : " + Texts.fmt(Key.probeIgnored, p1, p2)
+                    if (p2 > p1) "verdict   : " + Texts.fmt(Key.ProbeHonored, p1, p2)
+                    else "verdict   : " + Texts.fmt(Key.ProbeIgnored, p1, p2)
                 )
             }
         } catch (e: Exception) {
-            line(Texts.fmt(Key.probeFail, e.message ?: "?"))
+            line(Texts.fmt(Key.ProbeFail, e.message ?: "?"))
         }
         return out
     }

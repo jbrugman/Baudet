@@ -1,5 +1,6 @@
 package dev.mule.ui
 
+import dev.mule.api.Turn
 import dev.mule.app.AppState
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
@@ -9,7 +10,6 @@ import java.awt.Font
 import java.awt.event.ActionEvent
 import javax.swing.AbstractAction
 import javax.swing.JButton
-import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
@@ -30,6 +30,8 @@ import javax.swing.text.StyleConstants
  */
 class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
+    companion object { private const val SEND_COMMAND = "mule-send" }
+
     private val doc = DefaultStyledDocument()
     private val pane = JTextPane(doc).apply {
         isEditable = false
@@ -43,7 +45,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         lineWrap = true
         wrapStyleWord = true
     }
-    private val sendButton = JButton(Texts[Key.sendButton])
+    private val sendButton = JButton(Texts[Key.SendButton])
     private val status = javax.swing.JTextField(" ").apply { isEditable = false }
 
     private val normal = SimpleAttributeSet().apply {
@@ -56,7 +58,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val error = SimpleAttributeSet(normal).apply {
         StyleConstants.setForeground(this, Color(235, 110, 110))
     }
-    /** Reasoning reads as a aside: grey and italic, so the answer stays dominant. */
+    /** Reasoning reads as an aside: gray and italic, so the answer stays dominant. */
     private val reasoningStyle = SimpleAttributeSet(dim).apply {
         StyleConstants.setItalic(this, true)
     }
@@ -66,8 +68,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     init {
         val buttons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
         buttons.add(sendButton)
-        buttons.add(JButton(Texts[Key.newSessionButton]).apply { addActionListener { newSession() } })
-        buttons.add(JButton(Texts[Key.compactButton]).apply { addActionListener { compact() } })
+        buttons.add(JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } })
+        buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
 
         val south = JPanel(BorderLayout())
         south.add(buttons, BorderLayout.NORTH)
@@ -80,10 +82,10 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         sendButton.addActionListener { send() }
         val enter = KeyStroke.getKeyStroke("control ENTER")
         val cmdEnter = KeyStroke.getKeyStroke("meta ENTER")
-        input.getInputMap(JComponent.WHEN_FOCUSED).put(enter, "mule-send")
-        input.getInputMap(JComponent.WHEN_FOCUSED).put(cmdEnter, "mule-send")
-        input.getActionMap().put(
-            "mule-send",
+        input.getInputMap(WHEN_FOCUSED).put(enter, SEND_COMMAND)
+        input.getInputMap(WHEN_FOCUSED).put(cmdEnter, SEND_COMMAND)
+        input.actionMap.put(
+            SEND_COMMAND,
             object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent) = send()
             }
@@ -99,7 +101,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     fun refresh() {
         doc.remove(0, doc.length)
         val s = state.session
-        s.summary?.let { append(Texts.fmt(Key.summaryBanner, it.length) + "\n\n", dim) }
+        s.summary?.let { append(Texts.fmt(Key.SummaryBanner, it.length) + "\n\n", dim) }
         s.messages.forEach { m ->
             append("${m.role}: ", dim)
             append(m.content + "\n\n")
@@ -111,9 +113,9 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun statusLine(): String {
         val s = state.session
         val wire = if (state.serverSessionActive())
-            Texts.fmt(Key.serverSession, s.previousResponseId ?: "?")
-        else Texts[Key.clientReplay]
-        return "${Texts.fmt(Key.messagesCount, s.messages.size)} · ${state.contextWarning()} · $wire"
+            Texts.fmt(Key.ServerSession, s.previousResponseId ?: "?")
+        else Texts[Key.ClientReplay]
+        return "${Texts.fmt(Key.MessagesCount, s.messages.size)} · ${state.contextWarning()} · $wire"
     }
 
     private fun setBusy(b: Boolean) {
@@ -132,100 +134,117 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val text = input.text.trim()
         if (text.isEmpty()) return
         if (state.config.model.isBlank()) {
-            fail(Texts[Key.pickModelFirst])
+            fail(Texts[Key.PickModelFirst])
             return
         }
-        input.text = ""
-        setBusy(true)
-        status.text = Texts[Key.streaming]
-        append(Texts[Key.youLabel], dim)
-        append(text + "\n\n")
-        append(Texts[Key.muleLabel], dim)
+        beginTurn(text)
 
+        // A fresh renderer per turn keeps the reasoning/answer labelling scoped to
+        // this one stream; callbacks fire on the worker thread, completion on the EDT.
+        val render = TurnRender()
         Thread {
-            // Reasoning streams ahead of the answer on this backend. Both callbacks
-            // fire on this one worker thread and invokeLater preserves submission
-            // order, so labelling the first chunk of each kind reads correctly.
-            var sawReasoning = false
-            var labelledAnswer = false
             try {
-                val turn = state.send(
-                    text,
-                    onDelta = { delta ->
-                        SwingUtilities.invokeLater {
-                            if (sawReasoning && !labelledAnswer) {
-                                labelledAnswer = true
-                                append("\n" + Texts[Key.answerLabel] + "\n", dim)
-                            }
-                            append(delta)
-                        }
-                    },
-                    onReasoning = { chunk ->
-                        SwingUtilities.invokeLater {
-                            if (!sawReasoning) {
-                                sawReasoning = true
-                                append(Texts[Key.reasoningLabel] + "\n", dim)
-                            }
-                            append(chunk, reasoningStyle)
-                        }
-                    }
-                )
-                SwingUtilities.invokeLater {
-                    append("\n\n")
-                    val counts = "id=${turn.responseId ?: Texts[Key.none]} · " +
-                        "prompt=${turn.usage?.prompt} · completion=${turn.usage?.completion} · " +
-                        Texts.fmt(Key.lastEvent, turn.finalEvent ?: "?") + " · ${state.contextWarning()}"
-                    // Truncation must be visible: a reasoning model can spend the whole
-                    // budget on its summary and answer with nothing at all, which without
-                    // this marker reads exactly like a successful reply.
-                    val incomplete = turn.incompleteReason != null ||
-                        turn.finalEvent == "response.incomplete"
-                    if (incomplete) {
-                        val reason = turn.incompleteReason
-                        fail((if (reason != null) Texts.fmt(Key.truncated, reason)
-                        else Texts[Key.truncatedUnknown]) + " · " + counts)
-                    } else {
-                        status.text = counts
-                    }
-                    setBusy(false)
-                }
+                val turn = state.send(text, render::delta, render::reasoning)
+                SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
-                SwingUtilities.invokeLater {
-                    append("\n" + Texts.fmt(Key.errorPrefix, e.message ?: "?") + "\n\n", error)
-                    fail(Texts[Key.turnFailed])
-                    setBusy(false)
-                }
+                SwingUtilities.invokeLater { turnFailed(e) }
             }
         }.start()
+    }
+
+    /** Take the busy lock and echo the prompt into the transcript before the reply. */
+    private fun beginTurn(text: String) {
+        input.text = ""
+        setBusy(true)
+        status.text = Texts[Key.Streaming]
+        append(Texts[Key.YouLabel], dim)
+        append(text + "\n\n")
+        append(Texts[Key.MuleLabel], dim)
+    }
+
+    /**
+     * Render a completed turn's outcome on the EDT. Truncation must be visible: a
+     * reasoning model can spend the whole budget on its summary and answer with
+     * nothing at all, which without this marker reads exactly like a good reply.
+     */
+    private fun finishTurn(turn: Turn) {
+        append("\n\n")
+        val counts = "id=${turn.responseId ?: Texts[Key.None]} · " +
+            "prompt=${turn.usage?.prompt} · completion=${turn.usage?.completion} · " +
+            Texts.fmt(Key.LastEvent, turn.finalEvent ?: "?") + " · ${state.contextWarning()}"
+        val incomplete = turn.incompleteReason != null ||
+            turn.finalEvent == "response.incomplete"
+        if (incomplete) {
+            val reason = turn.incompleteReason
+            fail((if (reason != null) Texts.fmt(Key.Truncated, reason)
+            else Texts[Key.TruncatedUnknown]) + " · " + counts)
+        } else {
+            status.text = counts
+        }
+        setBusy(false)
+    }
+
+    /** Surface a failed turn on the EDT: the error inline, the cause in the status. */
+    private fun turnFailed(e: Exception) {
+        append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
+        fail(Texts[Key.TurnFailed])
+        setBusy(false)
+    }
+
+    /**
+     * Turns the two response streams into transcript writes. Reasoning streams
+     * ahead of the answer on this backend; both callbacks fire on the one worker
+     * thread and invokeLater preserves submission order, so the first chunk of each
+     * kind is labelled exactly once.
+     */
+    private inner class TurnRender {
+        private var sawReasoning = false
+        private var labelledAnswer = false
+
+        fun delta(delta: String) = SwingUtilities.invokeLater {
+            if (sawReasoning && !labelledAnswer) {
+                labelledAnswer = true
+                append("\n" + Texts[Key.AnswerLabel] + "\n", dim)
+            }
+            append(delta)
+        }
+
+        fun reasoning(chunk: String) = SwingUtilities.invokeLater {
+            if (!sawReasoning) {
+                sawReasoning = true
+                append(Texts[Key.ReasoningLabel] + "\n", dim)
+            }
+            append(chunk, reasoningStyle)
+        }
     }
 
     private fun newSession() {
         state.newSession()
         refresh()
-        status.text = Texts.fmt(Key.newSessionStatus, state.session.sessionId)
+        status.text = Texts.fmt(Key.NewSessionStatus, state.session.sessionId)
     }
 
     private fun compact() {
         if (busy) return
         if (state.session.messages.size <= 4) {
-            status.text = Texts[Key.tooFewTurns]
+            status.text = Texts[Key.TooFewTurns]
             return
         }
         setBusy(true)
-        status.text = Texts[Key.summarising]
+        status.text = Texts[Key.Summarising]
         Thread {
             try {
                 val summary = state.compact(keepLast = 4) { }
                 SwingUtilities.invokeLater {
                     refresh()
                     status.foreground = Color(120, 200, 130)
-                    status.text = if (summary == null) Texts[Key.compactionEmpty]
-                    else Texts.fmt(Key.compactionDone, summary.length)
+                    status.text = if (summary == null) Texts[Key.CompactionEmpty]
+                    else Texts.fmt(Key.CompactionDone, summary.length)
                     setBusy(false)
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
-                    fail(Texts.fmt(Key.compactionFailed, e.message ?: "?"))
+                    fail(Texts.fmt(Key.CompactionFailed, e.message ?: "?"))
                     setBusy(false)
                 }
             }
