@@ -18,12 +18,13 @@ import java.nio.file.Path
 
 /**
  * The first tool: patch one file inside a project folder by exact text edits. It
- * enforces the rights the permission model already stores -- a folder must be
- * linked and Write granted -- refuses any path that resolves outside that folder,
- * previews a diff and asks before writing, and keeps the original bytes so the
- * write can be undone. Every rejection is a [ToolResult] with a model-facing
- * reason, never an exception, so the model sees the same failure channel whether
- * the cause is a bad path or a stale match.
+ * enforces the rights the permission model already stores -- a folder must be linked and
+ * Write granted -- refuses any path that resolves outside that folder, previews a diff
+ * and asks before writing, and keeps the original bytes so the write can be undone.
+ * Every rejection is a [ToolResult] with a model-facing reason, never an exception, so
+ * the model sees the same failure channel whether the cause is a bad path or a stale
+ * match. When a path is wrong it returns a bounded, hidden-free listing of the folder so
+ * the model can find the real name on its own instead of guessing.
  */
 class EditFileTool : Tool {
 
@@ -68,12 +69,12 @@ class EditFileTool : Tool {
 
         val resolved = root.resolve(rel).normalize()
         if (!resolved.startsWith(root)) return fail("$rel resolves outside the project folder")
-        if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder")
+        if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder.${listing(root)}")
 
         val original = try {
             Files.readString(resolved)
         } catch (_: Exception) {
-            return fail("$rel could not be read")
+            return fail("$rel could not be read.${listing(root)}")
         }
 
         return when (val outcome = PatchApplier.apply(original, edits)) {
@@ -94,7 +95,11 @@ class EditFileTool : Tool {
         }
         val diff = UnifiedDiff.render("a/$rel", "b/$rel", LineDiff.diff(original, updated))
         if (!ctx.approve(rel, diff)) {
-            return ToolResult(ok = false, output = "the user rejected the change to $rel", diff = diff)
+            return ToolResult(
+                ok = false,
+                output = "the user declined the change to $rel; do not retry it, tell the user instead",
+                diff = diff
+            )
         }
         val undo: () -> Unit = { runCatching { Files.writeString(resolved, original) } }
         return try {
@@ -113,6 +118,31 @@ class EditFileTool : Tool {
             val all = (obj["replace_all"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
             Edit(old, new, all)
         } ?: emptyList()
+
+    /**
+     * A bounded, hidden-free listing of the folder as a model-facing hint, so a wrong
+     * path becomes a correctable mistake rather than a dead end. Scoped to the root,
+     * capped in both depth and count, and never descends into dot-directories, so it
+     * cannot leak the wider disk and stays small enough to feed back cheaply.
+     */
+    private fun listing(root: Path): String {
+        val names = mutableListOf<String>()
+        walk(root, root, 1, names)
+        return if (names.isEmpty()) "" else " Files here: " + names.sorted().joinToString(", ")
+    }
+
+    private fun walk(root: Path, dir: Path, depth: Int, out: MutableList<String>) {
+        if (depth > 3 || out.size >= 50) return
+        val children = runCatching { Files.newDirectoryStream(dir).use { it.toList() } }.getOrNull() ?: return
+        children.sorted().forEach { child ->
+            val name = child.fileName.toString()
+            if (name.startsWith(".")) return@forEach
+            when {
+                Files.isDirectory(child) -> walk(root, child, depth + 1, out)
+                Files.isRegularFile(child) && out.size < 50 -> out.add(root.relativize(child).toString())
+            }
+        }
+    }
 
     private fun fail(reason: String): ToolResult = ToolResult(ok = false, output = "edit_file: $reason")
 }

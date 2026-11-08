@@ -246,7 +246,10 @@ class AppState(val store: H2Store) {
         outcome.messages.forEach { session.messages.add(it) }
         if (outcome.responseId != null) session.previousResponseId = outcome.responseId
         return when (outcome) {
-            is LoopOutcome.Completed -> outcome.finalTurn
+            is LoopOutcome.Completed ->
+                if (outcome.capReached && outcome.finalTurn.incompleteReason == null)
+                    outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
+                else outcome.finalTurn
             is LoopOutcome.CapReached -> Turn(
                 text = "",
                 responseId = outcome.responseId,

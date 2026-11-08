@@ -115,7 +115,7 @@ class EditFileToolSpec : BehaviorSpec({
             val result = tool.execute(args("a.txt", Triple("one", "two", false)), ctx)
             then("nothing is written") {
                 result.ok shouldBe false
-                result.output.contains("rejected") shouldBe true
+                result.output.contains("declined") shouldBe true
                 Files.readString(target) shouldBe "one\n"
             }
         }
@@ -134,4 +134,22 @@ class EditFileToolSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a file that is not there") {
+        val root = newRoot("mule-edit-missing")
+        Files.writeString(root.resolve("present.txt"), "keep\n")
+        val sub = Files.createDirectories(root.resolve("sub"))
+        Files.writeString(sub.resolve("inner.txt"), "keep\n")
+        val ctx = ToolContext(root, writeGranted = true, approve = { _, _ -> true })
+        `when`("editing a path that does not exist") {
+            val result = tool.execute(args("nope.txt", Triple("a", "b", false)), ctx)
+            then("it fails and names the real files so the model can correct the path") {
+                result.ok shouldBe false
+                (result.output.contains("does not exist")) shouldBe true
+                (result.output.contains("present.txt")) shouldBe true
+                (result.output.contains("sub/inner.txt")) shouldBe true
+            }
+        }
+    }
+
 })
