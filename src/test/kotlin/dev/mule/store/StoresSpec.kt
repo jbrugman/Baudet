@@ -123,4 +123,29 @@ class StoresSpec : BehaviorSpec({
             }
         }
     }
+
+    given("two sessions each carrying a message") {
+        val store = freshStore()
+        store.upsertSession("s-del", model = "m", prevResponseId = "r", lastSeq = 1)
+        store.rewriteMessages("s-del", listOf(Msg("user", "gone")))
+        store.upsertSession("s-keep", model = "m", prevResponseId = null, lastSeq = 1)
+        store.rewriteMessages("s-keep", listOf(Msg("user", "kept")))
+        store.deleteSession("s-del")
+        `when`("reading after the delete") {
+            then("the deleted session and its messages are gone") {
+                store.messages("s-del") shouldBe emptyList()
+                store.model("s-del") shouldBe null
+                store.latestSessionId(10) shouldBe listOf("s-keep")
+            }
+            then("the untouched session still reads back whole") {
+                store.messages("s-keep") shouldBe listOf(Msg("user", "kept"))
+            }
+        }
+        `when`("deleting an unknown session") {
+            then("it is a safe no-op that touches nothing") {
+                store.deleteSession("nope")
+                store.messages("s-keep") shouldBe listOf(Msg("user", "kept"))
+            }
+        }
+    }
 })

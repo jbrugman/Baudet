@@ -5,8 +5,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
-data class ModelInfo(val id: String, val ownedBy: String?, val created: Long?)
-
 object ModelsClient {
 
     /** GET {base}/models -> sorted ids. */

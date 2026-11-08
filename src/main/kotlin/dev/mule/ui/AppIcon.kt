@@ -18,12 +18,12 @@ import javax.imageio.ImageIO
  * into IA" pun that named the app. Painted in code rather than shipped as a bitmap:
  * it draws sharp at any taskbar size, adds no binary to the jar, and stays
  * reflection-free for a future native-image build. The long tapered ears and the
- * plain muzzle are what read as "donkey"; a round face with a coloured nose instead
+ * plain muzzle are what read as "donkey"; a round face with a colored nose instead
  * reads as a rabbit, which is exactly the confusion to avoid.
  */
 object AppIcon {
 
-    // Modelled in a 100x100 space and scaled per draw, so every size renders at its
+    // Modeled in a 100x100 space and scaled per draw, so every size renders at its
     // own resolution instead of shrinking one big bitmap down.
     private val head = Color(0x8B9099)
     private val mane = Color(0x4A4F57)
