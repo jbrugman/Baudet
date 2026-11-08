@@ -41,9 +41,11 @@ concrete behavior:
   stays visible so a silently missed delta cannot hide.
 - **Client-side compaction**, because there is no compact endpoint to call.
 
-## Current state: pre-alpha
+## Current state: alpha
 
-The wire layer works; the product around it is a skeleton.
+The wire layer and the file tools work; the editor surface around them is still
+thin. The model can now read a project file and apply a patch to one, which is
+what tips Mule from a chat client toward a coding assistant.
 
 Working:
 
@@ -53,17 +55,26 @@ Working:
 - capability probe: what the backend *does* rather than what it accepts
 - persisted session: the last conversation is restored after a restart
 - client-side compaction
-- UI text in English or Dutch, switchable at runtime (English is the default)
+- UI text in English, Dutch, French or German, switchable at runtime (English is the default)
 - projects in a left sidebar, with conversations grouped under them and
-  per-folder read/write/execute grants (only Read is enforced today)
-- a read-only project file tree on the right, following the selected project
+  per-folder read/write/execute grants: Read gates the file tree, Write gates the
+  file tools, and Execute is stored but not enforced yet
+- file tools driven by the model — `read_file` and `edit_file` — run in a tool
+  loop, gated on a selected project that has a linked folder granted Write with
+  tools enabled; a folder that cannot be written is reported, never silently skipped
+- a project file tree on the right, following the selected project
+- the file tree colors each file by its git state — green changed, blue untracked,
+  red deleted (a ghost row when the file is gone from disk) — and double-clicking a
+  file opens its git patch; git here is read-only, it shows the change, it does not commit
 
 Not there yet:
 
-- no tools, no file editing, no git checkpoints, no diff view — so it is not
-  yet a coding assistant, only a chat client
+- no in-app editor and no markdown rendering: edits happen through the model, not
+  a text buffer
+- git is read-only inspection — no commit, no checkpoints
+- the file tree refreshes its git status on load and on Refresh, not automatically
+  after every turn
 - the GraalVM `native-image` profile is not wired up
-- no markdown rendering; the file tree is read-only, with no editor wired up
 
 ## Stack
 
@@ -122,7 +133,7 @@ That script exports the icon, compiles the `.icns`, and bundles the full default
 runtime. Set `MULE_PKG_TYPE=dmg` to also wrap the `.app` into a `.dmg`.
 
 One honest wrinkle: `jpackage` refuses a version whose major number is `0`, so
-the bundle is built with a placeholder version and the real pre-alpha version
+the bundle is built with a placeholder version and the real pre-release version
 from the pom is written back into `Info.plist`. The shipped `.app` therefore
 reports that pom version in Finder, not the placeholder it was built from.
 
@@ -134,7 +145,7 @@ Two things about launching it on Apple Silicon were learned the hard way, both
 specific to the Finder/`open` path (running the jar directly dodges them):
 
 - **The signature seal.** `jpackage` ad-hoc signs the bundle, then this build
-  stamps the real pre-alpha version into `Info.plist`. Editing a signed bundle
+  stamps the real pre-release version into `Info.plist`. Editing a signed bundle
   invalidates its seal (`invalid Info.plist: plist or signature have been
   modified`), and a bundle with a broken seal aborts during GUI startup in
   `-[NSApplicationAWT registerWithProcessManager]` before any window appears. The
