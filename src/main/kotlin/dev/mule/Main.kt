@@ -8,11 +8,19 @@ import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.ui.AppIcon
 import dev.mule.ui.ChatPanel
+import dev.mule.ui.ProjectSidebar
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
+import dev.mule.ui.SidebarToggleIcon
+import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.Insets
 import java.nio.file.Path
+import javax.swing.BorderFactory
+import javax.swing.JButton
 import javax.swing.JFrame
+import javax.swing.JPanel
+import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
@@ -79,8 +87,51 @@ private fun show(state: AppState, frame: JFrame) {
     tabs.addTab(Texts[Key.TabChat], chat)
     tabs.addTab(Texts[Key.TabModels], models)
     tabs.addTab(Texts[Key.TabSettings], settings)
+    // The split's right side is this tabbed pane; a JTabbedPane takes the largest minimum
+    // of its tabs (Settings holds a wide multi-line field), which is what clamped the divider.
+    tabs.minimumSize = Dimension(0, 0)
 
-    frame.contentPane = tabs
+    val sidebar = ProjectSidebar(
+        state,
+        onSelectSession = { sessionId -> chat.loadSession(sessionId) },
+        onAfterDelete = { chat.refresh() },
+        onSelectProject = { projectId -> chat.startProjectChat(projectId) }
+    ).apply { minimumSize = Dimension(0, 0) } // fully hideable via the divider's one-touch arrow
+    // A new or updated conversation in the chat must appear in the tree immediately.
+    chat.onSessionsChanged = { sidebar.reload() }
+
+    val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
+        dividerLocation = 280
+        resizeWeight = 0.2
+        isContinuousLayout = true
+        isOneTouchExpandable = false   // replaced by the toolbar toggle, which stays put when collapsed
+    }
+
+    // The toggle lives in the frame, not the sidebar, so it survives a collapse and can bring
+    // the panel back: divider 0 hides it fully, the remembered width restores it.
+    var expandedWidth = split.dividerLocation
+    val toggle = JButton(SidebarToggleIcon()).apply {
+        toolTipText = Texts[Key.ToggleSidebar]
+        isFocusable = false
+        margin = Insets(4, 6, 4, 6)
+        addActionListener {
+            if (split.dividerLocation > 0) {
+                expandedWidth = split.dividerLocation
+                split.dividerLocation = 0
+            } else {
+                split.dividerLocation = expandedWidth
+            }
+        }
+    }
+    val toolbar = JPanel(BorderLayout()).apply {
+        border = BorderFactory.createEmptyBorder(4, 4, 0, 4)
+        add(toggle, BorderLayout.WEST)
+    }
+    val root = JPanel(BorderLayout())
+    root.add(toolbar, BorderLayout.NORTH)
+    root.add(split, BorderLayout.CENTER)
+
+    frame.contentPane = root
     chat.refresh()
     settings.reload()
     frame.contentPane.revalidate()

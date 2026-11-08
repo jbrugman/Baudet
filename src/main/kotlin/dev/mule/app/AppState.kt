@@ -5,11 +5,13 @@ import dev.mule.api.Turn
 import dev.mule.config.AppConfig
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
+import dev.mule.project.Project
 import dev.mule.session.Compactor
 import dev.mule.session.Msg
 import dev.mule.session.SessionIds
 import dev.mule.session.SessionState
 import dev.mule.store.H2Store
+import dev.mule.store.SessionSummary
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -21,6 +23,9 @@ class AppState(val store: H2Store) {
 
     var config: AppConfig = store.load() ?: AppConfig()
     var session: SessionState = SessionState(SessionIds.new(), config.model, null)
+
+    /** The project a new chat is created under; set when one is selected in the sidebar. */
+    var currentProjectId: String? = null
 
     init {
         Texts.language = Texts.parse(config.language)
@@ -38,6 +43,7 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = msgs.toMutableList()
         )
+        session.projectId = store.projectOfSession(id)
     }
 
     /**
@@ -54,11 +60,71 @@ class AppState(val store: H2Store) {
         onConfigSaved(next)
     }
 
-    fun newSession(): SessionState {
+    /** Start a new conversation in the currently selected project, if any. */
+    fun newSession(): SessionState = newSession(currentProjectId)
+
+    /** Start a new conversation under a specific project; null places it in Unassigned. */
+    fun newSession(projectId: String?): SessionState {
         session = SessionState(SessionIds.new(), config.model, null)
-        store.upsertSession(session.sessionId, session.model, null, 0)
+        session.projectId = projectId
+        store.upsertSession(session.sessionId, session.model, null, 0, projectId)
         return session
     }
+
+    /**
+     * Begin a conversation under a project without writing an empty row: the first
+     * message persists it. Choosing a project uses this, so clicking through projects
+     * never litters the tree with abandoned empty sessions.
+     */
+    fun startSessionIn(projectId: String?): SessionState {
+        session = SessionState(SessionIds.new(), config.model, null)
+        session.projectId = projectId
+        return session
+    }
+
+    /**
+     * Load an existing conversation by id and adopt its project, so a later
+     * New session continues in the same place as the one just opened.
+     */
+    fun loadSession(id: String) {
+        session = SessionState(
+            sessionId = id,
+            model = store.model(id) ?: config.model,
+            previousResponseId = store.previousResponseId(id),
+            messages = store.messages(id).toMutableList()
+        )
+        session.projectId = store.projectOfSession(id)
+        currentProjectId = session.projectId
+    }
+
+    // ---- projects --------------------------------------------------------
+
+    fun projects(): List<Project> = store.listProjects()
+    fun sessionsIn(projectId: String?): List<SessionSummary> = store.sessionsIn(projectId)
+    fun addProject(name: String): Project = store.createProject(name)
+    fun renameProject(id: String, name: String) = store.renameProject(id, name)
+    fun linkFolder(id: String, path: String?, perms: Int) = store.setFolder(id, path, perms)
+    fun setProjectArchived(id: String, archived: Boolean) = store.setArchived(id, archived)
+
+    /** Delete a project and every conversation inside it; files on disk are never touched. */
+    fun deleteProject(id: String) {
+        val openWasInside = session.projectId == id
+        store.deleteProject(id)
+        if (currentProjectId == id) currentProjectId = null
+        // The open conversation lived here and is gone too; adopt a fresh session so a
+        // later persist cannot resurrect the deleted rows.
+        if (openWasInside) session = SessionState(SessionIds.new(), config.model, null)
+    }
+
+    /** Delete one conversation; if it is the open one, a fresh conversation takes its place. */
+    fun deleteSession(id: String) {
+        val openWasIt = session.sessionId == id
+        store.deleteSession(id)
+        if (openWasIt) session = SessionState(SessionIds.new(), config.model, null)
+    }
+
+    /** Rename one conversation; a blank title reverts to the derived first-line title. */
+    fun renameSession(id: String, title: String) = store.renameSession(id, title)
 
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
@@ -106,7 +172,7 @@ class AppState(val store: H2Store) {
     fun persist() {
         store.rewriteMessages(session.sessionId, session.messages)
         store.upsertSession(
-            session.sessionId, session.model, session.previousResponseId, session.messages.size
+            session.sessionId, session.model, session.previousResponseId, session.messages.size, session.projectId
         )
     }
 

@@ -38,7 +38,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         font = Font(Font.MONOSPACED, Font.PLAIN, 13)
         margin = java.awt.Insets(8, 8, 8, 8)
     }
-    private val scroll = JScrollPane(pane)
+    private val scroll = JScrollPane(pane).apply { minimumSize = java.awt.Dimension(0, 0) }
 
     private val input = javax.swing.JTextArea(4, 60).apply {
         font = Font(Font.MONOSPACED, Font.PLAIN, 13)
@@ -46,7 +46,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         wrapStyleWord = true
     }
     private val sendButton = JButton(Texts[Key.SendButton])
-    private val status = javax.swing.JTextField(" ").apply { isEditable = false }
+    private val status = javax.swing.JTextField(" ").apply { isEditable = false; minimumSize = java.awt.Dimension(0, 0) }
 
     private val normal = SimpleAttributeSet().apply {
         StyleConstants.setFontFamily(this, Font.MONOSPACED)
@@ -65,15 +65,23 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private var busy = false
 
+    /** Fired when the list of conversations may have changed, so the sidebar can re-render. */
+    var onSessionsChanged: () -> Unit = {}
+
     init {
-        val buttons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
+        val buttons = JPanel(WrapLayout(java.awt.FlowLayout.LEFT, 4, 0))
         buttons.add(sendButton)
         buttons.add(JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } })
         buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
 
+        // The right pane must stay free to shrink, or the sidebar split caps its
+        // width at whatever this column refuses to give up: WrapLayout lets the toolbar
+        // wrap, and the scroll/status fields drop their default (== preferred) minimum,
+        // so a narrow chat no longer holds the divider hostage.
+        val inputScroll = JScrollPane(input).apply { minimumSize = java.awt.Dimension(0, 0) }
         val south = JPanel(BorderLayout())
         south.add(buttons, BorderLayout.NORTH)
-        south.add(JScrollPane(input), BorderLayout.CENTER)
+        south.add(inputScroll, BorderLayout.CENTER)
         south.add(status, BorderLayout.SOUTH)
 
         add(scroll, BorderLayout.CENTER)
@@ -108,6 +116,29 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         }
         status.foreground = Color(160, 160, 160)
         status.text = statusLine()
+    }
+
+    /**
+     * Switch the transcript to an existing session chosen in the sidebar. Ignored
+     * mid-stream, so a reply in flight is never torn down under the user.
+     */
+    fun loadSession(id: String) {
+        if (busy) return
+        state.loadSession(id)
+        refresh()
+    }
+
+    /**
+     * Begin a brand-new conversation under the chosen project, mirroring [loadSession]
+     * in refusing to tear down a reply in flight. Unlike the New session button this
+     * does not persist, so merely clicking through projects leaves no empty chats.
+     */
+    fun startProjectChat(projectId: String?) {
+        if (busy) return
+        state.startSessionIn(projectId)
+        refresh()
+        val name = state.projects().firstOrNull { it.id == projectId }?.name
+        status.text = Texts.fmt(Key.ProjectChatStatus, name ?: Texts[Key.InboxNode])
     }
 
     private fun statusLine(): String {
@@ -182,6 +213,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             status.text = counts
         }
         setBusy(false)
+        onSessionsChanged()
     }
 
     /** Surface a failed turn on the EDT: the error inline, the cause in the status. */
@@ -222,6 +254,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         state.newSession()
         refresh()
         status.text = Texts.fmt(Key.NewSessionStatus, state.session.sessionId)
+        onSessionsChanged()
     }
 
     private fun compact() {
