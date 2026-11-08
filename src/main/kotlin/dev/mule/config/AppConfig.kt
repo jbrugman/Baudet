@@ -19,7 +19,7 @@ data class AppConfig(
     var apiKey: String = "",
     var apiKeyEnvVar: String = "OMLX_API_KEY",
     var model: String = "",
-    /** UI language: "en" or "nl". Anything else reads back as English. */
+    /** UI language: "en", "nl", "fr" or "de". Anything else reads back as English. */
     var language: String = "en",
 
     /**
@@ -40,6 +40,15 @@ data class AppConfig(
     var storeResponses: Boolean = true,
     /** Send previous_response_id. Off for backends that only swallow the field. */
     var useServerSession: Boolean = true,
+
+    /**
+     * Whether the assistant may call tools in a turn. Ask previews each change,
+     * Auto writes directly, Off never enters the loop. Ask by default: writing to
+     * a project folder should not happen behind the user's back on a fresh install.
+     */
+    var toolMode: ToolMode = ToolMode.Ask,
+    /** Upper bound on model<->tool round trips in one turn; a guard against a runaway loop. */
+    var maxToolIterations: Int = 8,
 
     /** Blank = the built-in English default (model-facing, never translated); typed text always wins. */
     var systemPrompt: String = ""
