@@ -192,4 +192,22 @@ class TurnAccumulatorSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a completed response whose output carries a native call") {
+        val acc = fed(
+            """{"type":"response.created","response":{"id":"resp_fc"}}""",
+            """{"type":"response.completed","response":{"id":"resp_fc","output":[{"type":"function_call","call_id":"call_abc","name":"edit_file","arguments":"{\"file\":\"README.md\"}"}]}}"""
+        )
+
+        `when`("the stream is finished") {
+            val turn = acc.finish()
+            then("the native call is captured with its id, name and raw arguments") {
+                turn.functionCalls.size shouldBe 1
+                turn.functionCalls[0].callId shouldBe "call_abc"
+                turn.functionCalls[0].name shouldBe "edit_file"
+                (turn.functionCalls[0].arguments.contains("README.md")) shouldBe true
+            }
+        }
+    }
+
 })

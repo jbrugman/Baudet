@@ -1,5 +1,7 @@
 package dev.mule.api
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
@@ -16,6 +18,7 @@ class TurnAccumulator(private val sampleLimit: Int = 700) {
 
     private val out = StringBuilder()
     private val reason = StringBuilder()
+    private val calls = mutableListOf<FunctionCall>()
     val events = LinkedHashMap<String, Int>()
     val samples = LinkedHashMap<String, String>()
 
@@ -70,7 +73,8 @@ class TurnAccumulator(private val sampleLimit: Int = 700) {
             events = events.toMap(),
             samples = samples.toMap(),
             reasoning = reason.toString(),
-            incompleteReason = incompleteReason
+            incompleteReason = incompleteReason,
+            functionCalls = calls.toList()
         )
     }
 
@@ -105,7 +109,7 @@ class TurnAccumulator(private val sampleLimit: Int = 700) {
         return null
     }
 
-    /** Response-level bookkeeping: the id, the usage, and why the run ended. */
+    /** Response-level bookkeeping: the id, the usage, why the run ended, and any calls. */
     private fun absorbResponse(type: String, o: JsonObject) {
         val r = o.obj("response") ?: o
         r.str("id")?.let { responseId = it }
@@ -126,6 +130,12 @@ class TurnAccumulator(private val sampleLimit: Int = 700) {
             }
         }
 
+        // Native function calls ride two event shapes: the finished response carries
+        // them in its output array, and some backends surface each item on its own done
+        // event. Both are read; addCall dedupes so neither double-counts the other.
+        (r["output"] as? JsonArray)?.forEach { collectCall(it) }
+        if (type.endsWith("output_item.done")) collectCall(o.obj("item"))
+
         // Tolerant fallback: a backend may skip deltas and deliver the finished
         // text only. Adopt it just when nothing streamed, so nothing counts twice.
         if (type.endsWith("output_text.done") && out.isEmpty()) {
@@ -134,6 +144,23 @@ class TurnAccumulator(private val sampleLimit: Int = 700) {
         if (type.endsWith("reasoning_summary_text.done") && reason.isEmpty()) {
             o.str("text")?.let { if (it.isNotEmpty()) reason.append(it) }
         }
+    }
+
+    private fun collectCall(el: JsonElement?) {
+        val item = el as? JsonObject ?: return
+        if (item.str("type") != "function_call") return
+        val name = item.str("name") ?: return
+        val callId = item.str("call_id") ?: item.str("id")
+        val args = item.str("arguments") ?: item.obj("arguments")?.toString() ?: ""
+        addCall(FunctionCall(callId, name, args))
+    }
+
+    private fun addCall(c: FunctionCall) {
+        val seen = calls.any {
+            if (c.callId != null) it.callId == c.callId
+            else it.name == c.name && it.arguments == c.arguments
+        }
+        if (!seen) calls.add(c)
     }
 
     private fun parseUsage(u: JsonObject): Usage =

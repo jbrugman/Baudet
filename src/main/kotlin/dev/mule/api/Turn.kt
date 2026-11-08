@@ -13,5 +13,7 @@ data class Turn(
     /** reasoning summary streamed alongside the answer, kept out of the prompt */
     val reasoning: String = "",
     /** why the backend stopped early, e.g. max_output_tokens; null when it finished */
-    val incompleteReason: String? = null
+    val incompleteReason: String? = null,
+    /** native function calls the backend returned; empty when the answer is prose only */
+    val functionCalls: List<FunctionCall> = emptyList()
 )
