@@ -68,13 +68,20 @@ jobs:
           TAG="v${VERSION}"
           ZIP="Mule-${VERSION}-macos.zip"
           ditto -c -k --sequesterRsrc --keepParent target/dist/Mule.app "$ZIP"
+          # Offer the runnable jar too: the .app is ad-hoc signed, so a downloaded copy
+          # is blocked by Gatekeeper -- the jar is the artifact that runs on any JVM.
+          SHADED_JAR="$(find target -maxdepth 1 -name 'mule-*.jar' ! -name 'original-*' | sort | head -n 1)"
+          JAR="Mule-${VERSION}.jar"
+          cp "$SHADED_JAR" "$JAR"
+          NOTES="Assets: ${ZIP} (ad-hoc-signed .app; needs a Developer ID + notarization to open on another Mac) and ${JAR} (runnable jar; the portable artifact, run with java -jar ${JAR})."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists; re-uploading $ZIP"
-            gh release upload "$TAG" "$ZIP" --clobber
+            echo "Release $TAG exists; re-uploading ${ZIP} and ${JAR}"
+            gh release upload "$TAG" "$ZIP" "$JAR" --clobber
           else
-            echo "Creating release $TAG with $ZIP"
-            gh release create "$TAG" "$ZIP" \
+            echo "Creating release $TAG with ${ZIP} and ${JAR}"
+            gh release create "$TAG" "$ZIP" "$JAR" \
               --target "${GITHUB_SHA}" \
               --title "$TAG" \
+              --notes "$NOTES" \
               --generate-notes
           fi
