@@ -110,4 +110,45 @@ class ExecuteToolSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a granted context that pre-approves without a human") {
+        // autoApproveSafe and the always-allow list must skip the prompt only for what they name;
+        // everything else still asks, so opting in cannot quietly widen to an unsafe command.
+        val root = newRoot("mule-exec-auto")
+
+        `when`("a safe command runs with the safe gate on and the approver set to deny") {
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, autoApproveSafe = true
+            )
+            then("it runs anyway, because the gate recognised it as read-only") {
+                val result = tool.execute(commandArgs("echo auto ok"), ctx)
+                result.ok shouldBe true
+                result.output shouldContain "auto ok"
+                result.output shouldContain "exit code: 0"
+            }
+        }
+        `when`("an exact allow-listed command runs with the approver set to deny") {
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, autoAllow = setOf("true")
+            )
+            then("it runs, because the command is pinned to the list") {
+                val result = tool.execute(commandArgs("true"), ctx)
+                result.ok shouldBe true
+                result.output shouldContain "exit code: 0"
+            }
+        }
+        `when`("an unsafe command runs with the safe gate on and the approver set to deny") {
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, autoApproveSafe = true
+            )
+            then("it is declined, because opting into safe commands does not approve anything else") {
+                val result = tool.execute(commandArgs("exit 3"), ctx)
+                result.ok shouldBe false
+                result.output shouldContain "declined"
+            }
+        }
+    }
 })

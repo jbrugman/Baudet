@@ -85,7 +85,13 @@ fun main(args: Array<String>) {
         // Ask mode reaches back through AppState for a real decision; Auto bypasses it
         // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
         state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
-        state.approveCommand = { command, cwd, timeout -> confirmRun(frame, command, cwd, timeout) }
+        state.approveCommand = { command, cwd, timeout ->
+            when (confirmRun(frame, command, cwd, timeout)) {
+                RunDecision.Once -> true
+                RunDecision.Always -> { state.allowCommandAlways(command); true }
+                RunDecision.Deny -> false
+            }
+        }
 
         // Remember the window and both split widths when the window closes. A collapsed
         // side stays out of the saved geometry, so reopening never restores a hidden panel.
@@ -274,8 +280,10 @@ private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
  * prompt. Approval is required even in Auto mode because running a command is the one
  * action the folder boundary cannot fence for us.
  */
-private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): Boolean {
-    var approved = false
+private enum class RunDecision { Deny, Once, Always }
+
+private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): RunDecision {
+    var decision = RunDecision.Deny
     try {
         SwingUtilities.invokeAndWait {
             val prompt = JTextArea(Texts.fmt(Key.RunReviewPrompt, workingDir, timeoutSeconds)).apply {
@@ -287,18 +295,30 @@ private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeo
                 font = Font(Font.MONOSPACED, Font.PLAIN, 12)
             }
             val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 200) }
-            approved = JOptionPane.showConfirmDialog(
+            // Three choices, not a bare yes/no: running once is the safe default, and "always" lets
+            // the user stop being asked about the very command now on screen. The command is pinned
+            // whole, so an allow here is an allow for exactly this string, never a chained variant.
+            val options = arrayOf(Texts[Key.AllowOnce], Texts[Key.AlwaysAllow], Texts[Key.DenyButton])
+            val choice = JOptionPane.showOptionDialog(
                 owner,
                 arrayOf<Any>(prompt, scroll),
                 Texts[Key.RunReviewTitle],
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-            ) == JOptionPane.YES_OPTION
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]
+            )
+            decision = when (choice) {
+                0 -> RunDecision.Once
+                1 -> RunDecision.Always
+                else -> RunDecision.Deny
+            }
         }
     } catch (_: Exception) {
-        approved = false
+        decision = RunDecision.Deny
     }
-    return approved
+    return decision
 }
 
 /**

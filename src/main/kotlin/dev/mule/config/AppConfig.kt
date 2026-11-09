@@ -50,6 +50,19 @@ data class AppConfig(
     /** Upper bound on model<->tool round trips in one turn; a guard against a runaway loop. */
     var maxToolIterations: Int = 8,
 
+    /**
+     * Exact commands the user chose to always allow from the run dialog. Matching is on the whole
+     * command string, never a prefix or pattern, so approving "ls" cannot later let "ls && rm -rf"
+     * through. Off by empty; nothing runs without an explicit entry here or a per-turn approval.
+     */
+    var autoAllowCommands: MutableList<String> = mutableListOf(),
+    /**
+     * Opt-in: auto-approve commands [dev.mule.tool.SafeCommands] recognises as plainly read-only
+     * (a single simple command like ls, cat or git status). Default off, so a fresh install still
+     * asks for every command; the user turns it on deliberately to stop being nagged over harmless ones.
+     */
+    var autoApproveSafeCommands: Boolean = false,
+
     /** Blank = the built-in English default (model-facing, never translated); typed text always wins. */
     var systemPrompt: String = "",
 

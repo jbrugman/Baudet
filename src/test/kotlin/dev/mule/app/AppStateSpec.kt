@@ -209,6 +209,20 @@ class AppStateSpec : BehaviorSpec({
      * or when the budget is off; only a genuine over-budget turn should fold. These pin the two
      * safe early-return paths so an inverted guard cannot silently spend a request on every send.
      */
+    given("pinning a command to always allow") {
+        val state = freshState()
+        `when`("a command is allowed always") {
+            state.allowCommandAlways("mvn -B test")
+            then("it is persisted, so a restart keeps the decision") {
+                (state.store.load()?.autoAllowCommands?.contains("mvn -B test")) shouldBe true
+            }
+            then("repeating it does not add a duplicate") {
+                state.allowCommandAlways("mvn -B test")
+                state.store.load()?.autoAllowCommands?.count { it == "mvn -B test" } shouldBe 1
+            }
+        }
+    }
+
     given("auto-compaction for the next turn") {
         `when`("the budget is switched off") {
             val state = freshState()

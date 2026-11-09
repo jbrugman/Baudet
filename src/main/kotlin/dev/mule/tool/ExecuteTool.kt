@@ -62,7 +62,12 @@ class ExecuteTool : Tool {
 
         val timeout = args.intOrNull("timeout_seconds")?.coerceIn(1, MAX_TIMEOUT_SECONDS)
             ?: DEFAULT_TIMEOUT_SECONDS
-        if (!ctx.approveCommand(command, cwd.toString(), timeout))
+        // A command the user pinned to the always-allow list, or one the opt-in safe-command gate
+        // recognises as read-only, skips the prompt. Everything else is still confirmed by a human,
+        // because a subprocess cannot be fenced by the folder boundary the way a file write can.
+        val preApproved = command in ctx.autoAllow ||
+            (ctx.autoApproveSafe && SafeCommands.isSafe(command))
+        if (!preApproved && !ctx.approveCommand(command, cwd.toString(), timeout))
             return ToolResult(ok = false, output = "run_command: the user declined to run this command")
 
         val script = runCatching { Files.createTempFile(temp, "mule-run-", ".sh") }

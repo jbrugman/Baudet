@@ -187,6 +187,18 @@ class AppState(val store: H2Store) {
     fun linkFolder(id: String, path: String?, perms: Int) = store.setFolder(id, path, perms)
     fun setProjectArchived(id: String, archived: Boolean) = store.setArchived(id, archived)
 
+    /**
+     * Pin an exact command to the always-allow list and persist it, so the next identical
+     * command runs without a prompt. Persists with [H2Store.save] alone rather than
+     * [saveConfig]: an allow-list change must not fire [onConfigSaved], which would rebuild
+     * the panels for something the running turn reads from config on its next call anyway.
+     */
+    fun allowCommandAlways(command: String) {
+        if (command in config.autoAllowCommands) return
+        config.autoAllowCommands.add(command)
+        store.save(config)
+    }
+
     /** Delete a project and every conversation inside it; files on disk are never touched. */
     fun deleteProject(id: String) {
         if (turning) return
@@ -392,7 +404,9 @@ class AppState(val store: H2Store) {
             approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
             execGranted = executable,
             approveCommand = approveCommand,
-            readGranted = readGranted
+            readGranted = readGranted,
+            autoAllow = config.autoAllowCommands.toSet(),
+            autoApproveSafe = config.autoApproveSafeCommands
         )
         // Build the enabled tools once, then advertise exactly those in the prompt: the registry
         // and the system prompt must name the same set, or the model is taught to call a tool it
