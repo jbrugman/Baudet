@@ -106,10 +106,11 @@ object Markdown {
      */
     fun line(line: String): List<Span> {
         headingLevel(line)?.let { level ->
-            return listOf(Span("#".repeat(level) + " ", SpanKind.Marker)) +
-                inline(line.trimStart().removePrefix("#".repeat(level) + " ")).map {
-                    if (it.kind == SpanKind.Plain) it.copy(kind = SpanKind.Heading) else it
-                }
+            // The hashes are dropped, not dimmed: a rendered heading shows styled words,
+            // never the source prefix. Inline emphasis inside the heading still applies.
+            return inline(line.trimStart().removePrefix("#".repeat(level) + " ")).map {
+                if (it.kind == SpanKind.Plain) it.copy(kind = SpanKind.Heading) else it
+            }
         }
         bulletMarker(line)?.let { marker ->
             return listOf(Span(marker, SpanKind.Marker)) + inline(line.substring(marker.length))
@@ -147,8 +148,7 @@ class MarkdownStream(private val emit: (String, SpanKind) -> Unit) {
             pending.setLength(0)
             if (!started && line.isBlank()) continue
             started = true
-            emitLine(line)
-            emit("\n", SpanKind.Plain)
+            if (emitLine(line)) emit("\n", SpanKind.Plain)
         }
     }
 
@@ -167,17 +167,23 @@ class MarkdownStream(private val emit: (String, SpanKind) -> Unit) {
         }
     }
 
-    private fun emitLine(line: String) {
+    /** Style one line, and report whether anything visible was drawn so the caller can skip its newline. */
+    private fun emitLine(line: String): Boolean {
         if (Markdown.isFence(line)) {
+            val opening = !inFence
             inFence = !inFence
-            val language = Markdown.fenceLanguage(line)
-            emit("```" + (language ?: ""), SpanKind.CodeBlock)
-            return
+            // The fence characters are hidden so the block reads as a block, not as source.
+            // An opening tag names the language; a closing line shows nothing.
+            if (!opening) return false
+            val language = Markdown.fenceLanguage(line) ?: return false
+            emit(language, SpanKind.Marker)
+            return true
         }
         if (inFence) {
             emit(line, SpanKind.CodeBlock)
-            return
+            return true
         }
         Markdown.line(line).forEach { (text, kind) -> emit(text, kind) }
+        return true
     }
 }

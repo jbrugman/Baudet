@@ -278,12 +278,27 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val s = state.session
         s.summary?.let { append(Texts.fmt(Key.SummaryBanner, it.length) + "\n\n", dim) }
         s.messages.forEach { m ->
-            append("${m.role}: ", dim)
-            append(m.content + "\n\n")
+            // History mirrors the live turn: an answer is re-rendered through the same
+            // markdown stream, so a reload shows what the user first saw. A user line
+            // stays raw because it is the prompt, not a rendered answer.
+            append(if (m.role == "assistant") Texts[Key.MuleLabel] else Texts[Key.YouLabel], dim)
+            if (m.role == "assistant") renderAnswer(m.content) else append(m.content + "\n\n")
         }
         status.foreground = Color(160, 160, 160)
         status.text = statusLine()
         updateToolWarning()
+    }
+
+    /**
+     * Re-render a stored answer through the same markdown stream a live turn uses, so a
+     * reload or session switch shows the styling the user first saw while it streamed in.
+     * A user line is not routed here: it is the prompt, kept raw by the caller.
+     */
+    private fun renderAnswer(content: String) {
+        val stream = MarkdownStream { text, kind -> append(text, attrsFor(kind)) }
+        stream.write(content)
+        stream.flush()
+        append("\n\n")
     }
 
     /**

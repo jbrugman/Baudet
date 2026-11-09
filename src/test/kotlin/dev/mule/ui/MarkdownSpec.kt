@@ -67,9 +67,8 @@ class MarkdownSpec : BehaviorSpec({
 
     given("a line that opens with structure") {
         `when`("it is a heading") {
-            then("the hashes are a marker and the words are a heading") {
+            then("the hashes are dropped and the words are a heading") {
                 kinds(Markdown.line("## Title")) shouldContainExactly listOf(
-                    SpanKind.Marker to "## ",
                     SpanKind.Heading to "Title"
                 )
             }
@@ -98,22 +97,31 @@ class MarkdownSpec : BehaviorSpec({
             .write("```kotlin\nlet x = *y*\n```\nplain *a*\n")
 
         `when`("the block arrives line by line") {
-            then("the fence keeps its language tag") {
-                emitted[0] shouldBe (SpanKind.CodeBlock to "```kotlin")
+            then("the fence characters are hidden and only the language tag shows") {
+                emitted[0] shouldBe (SpanKind.Marker to "kotlin")
+                emitted.none { (kind, text) -> kind == SpanKind.CodeBlock && text.startsWith("```") } shouldBe true
             }
             then("the lines inside are never inline parsed, so that asterisk is code") {
                 emitted[2] shouldBe (SpanKind.CodeBlock to "let x = *y*")
             }
-            then("the closing fence is styled the same way") {
-                emitted[4] shouldBe (SpanKind.CodeBlock to "```")
+            then("the closing fence leaves nothing behind") {
+                emitted.none { (_, text) -> text == "```" } shouldBe true
             }
             then("line breaks are emitted as plain text between the styled runs") {
                 emitted[1] shouldBe (SpanKind.Plain to "\n")
             }
             then("parsing resumes once the block closes") {
-                emitted.subList(6, 8) shouldContainExactly listOf(
+                emitted.subList(4, 6) shouldContainExactly listOf(
                     SpanKind.Plain to "plain ",
                     SpanKind.Italic to "a"
+                )
+            }
+            then("a fence without a tag leaves no marker and no blank line") {
+                val tagless = mutableListOf<Pair<SpanKind, String>>()
+                MarkdownStream { text, kind -> tagless += kind to text }.write("```\ncode\n```\n")
+                tagless shouldContainExactly listOf(
+                    SpanKind.CodeBlock to "code",
+                    SpanKind.Plain to "\n"
                 )
             }
         }
