@@ -52,7 +52,12 @@ Working:
 
 - list models, pick one, save settings
 - streaming chat over `/v1/responses` with a server-side session
-- reasoning summary shown apart from the answer
+- reasoning never enters the transcript: it fills a closable dock above the input, as tall as
+  the input itself, opens on its own the first time a turn thinks out loud, and stays closed for
+  the rest of that turn when you close it; it is display-only and never sent back to the model
+- answers are styled — fenced blocks, headings, bullets, bold, italic and inline code — while
+  links, tables and nested emphasis stay literal, underscores are never emphasis (identifiers
+  such as `max_output_tokens` must survive verbatim), and an unmatched marker is never removed
 - capability probe: what the backend *does* rather than what it accepts
 - persisted session: the last conversation is restored after a restart
 - client-side compaction
@@ -83,8 +88,7 @@ Working:
 
 Not there yet:
 
-- no in-app editor and no markdown rendering: edits happen through the model, not
-  a text buffer
+- no in-app editor: edits happen through the model, not a text buffer
 - git is read-only inspection — no commit, no checkpoints
 - the GraalVM `native-image` profile is not wired up
 

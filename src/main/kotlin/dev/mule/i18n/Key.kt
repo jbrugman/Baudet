@@ -54,7 +54,6 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     YouLabel("you: ", "jij: ", "vous : ", "Sie: "),
     MuleLabel("mule: ", "mule: ", "mule : ", "mule: "),
     ReasoningLabel("reasoning:", "redenering:", "raisonnement :", "Begründung:"),
-    AnswerLabel("answer:", "antwoord:", "réponse :", "Antwort:"),
     CompactRecommended("  COMPACT RECOMMENDED", "  COMPACT AANBEVOLEN", "  COMPRESSION RECOMMANDÉE", "  KOMPAKTIERUNG EMPFOHLEN"),
 
     // ---- models ------------------------------------------------------------
@@ -102,6 +101,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Une estimation côté client uniquement : elle remplit la barre de jetons et l'avertissement de compression. Rien n'en est envoyé au serveur et la vraie fenêtre de contexte n'est jamais demandée. À 0 ou vide, le budget disparaît.",
         "Nur eine Schätzung auf Client-Seite: sie füllt die Token-Leiste und die Kompaktwarnung. Nichts davon wird an den Server gesendet, und die echte Kontextgröße wird nie abgefragt. Bei 0 oder leer entfällt das Budget."
     ),
+    TipThinkingToggle("Show or hide the reasoning of this turn. It is never stored.", "Toon of verberg de redenering van deze beurt. Die wordt nooit opgeslagen.", "Affiche ou masque le raisonnement de ce tour. Il n'est jamais enregistré.", "Denkvorgang dieser Runde ein- oder ausblenden. Er wird nie gespeichert."),
     TipBaseUrl("The OpenAI-compatible API endpoint, usually ending in /v1. Point it at your local backend, for example 127.0.0.1:8000.", "De OpenAI-compatibele API, meestal eindigend op /v1. Richt deze op uw lokale backend, bijvoorbeeld 127.0.0.1:8000.", "Le point de terminaison de l'API compatible OpenAI, se terminant généralement par /v1. Pointez-le vers votre backend local, par exemple 127.0.0.1:8000.", "Der Endpunkt der OpenAI-kompatiblen API, normalerweise endend auf /v1. Richten Sie ihn auf Ihr lokales Backend, zum Beispiel 127.0.0.1:8000."),
     TipApiKey("The bearer token sent with each request. Leave blank to read it from the environment variable named on the next line.", "De bearer-token die bij elk verzoek wordt meegestuurd. Laat leeg om hem uit de omgevingsvariabele op de volgende regel te lezen.", "Le jeton bearer envoyé à chaque requête. Laissez vide pour le lire depuis la variable d'environnement indiquée sur la ligne suivante.", "Das Bearer-Token, das mit jeder Anfrage gesendet wird. Leer lassen, um es aus der Umgebungsvariable in der nächsten Zeile zu lesen."),
     TipEnvVar("Name of the environment variable to read the api key from, used only when the field above is blank.", "Naam van de omgevingsvariabele waar de api-key wordt uitgelezen, alleen gebruikt wanneer het veld hierboven leeg is.", "Nom de la variable d'environnement d'où lire la clé d'API, utilisée seulement si le champ ci-dessus est vide.", "Name der Umgebungsvariable, aus der der API-Schlüssel gelesen wird, nur verwendet, wenn das Feld darüber leer ist."),
