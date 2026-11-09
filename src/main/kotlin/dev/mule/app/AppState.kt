@@ -230,6 +230,34 @@ class AppState(val store: H2Store) {
         return if (used + reserve > budget) Texts.fmt(Key.ContextTooLong, used, budget) else null
     }
 
+    /**
+     * The token estimate a chained tool turn may reach before its next request is doomed. Under a
+     * server session the backend replays and grows its own context, so the client cannot bound the
+     * request by trimming what it sends; the loop watches this ceiling and stops cleanly instead of
+     * firing a call the backend is certain to refuse. It mirrors [contextGuard]: the budget less the
+     * reply it must leave room for, less a fixed allowance for the tool definitions and protocol the
+     * loop prepends. 0 when no budget is configured, which disables the ceiling entirely.
+     */
+    private fun contextCeilingTokens(): Long {
+        val budget = config.contextBudgetTokens
+        if (budget <= 0) return 0L
+        val reserve = config.maxOutputTokens.coerceAtLeast(0) + INPUT_OVERHEAD_TOKENS
+        return (budget - reserve).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS).toLong()
+    }
+
+    /**
+     * Fold the older turns away before a turn that would not fit, so a long conversation keeps going
+     * instead of being refused. It runs off the EDT and acts only when a budget is set and the guard
+     * would actually refuse: a conversation with room to spare is left untouched. The summary it
+     * produces rides into the next request through the system prompt, which is why it need not wait
+     * for the user to press Compact. It reuses [compact], so it claims the turn lock and persists.
+     */
+    fun autoCompactIfNeeded() {
+        if (config.contextBudgetTokens <= 0) return
+        if (contextGuard() == null) return
+        compact(AUTO_COMPACT_KEEP_LAST) {}
+    }
+
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
 
@@ -379,7 +407,8 @@ class AppState(val store: H2Store) {
             }),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
-            chainResponseId = config.useServerSession && s.previousResponseId != null
+            chainResponseId = config.useServerSession && s.previousResponseId != null,
+            contextCeiling = contextCeilingTokens()
         )
         // The sink appends each assistant message and tool observation as the loop produces
         // them, so a later failure cannot discard a real edit already made on disk.
@@ -402,7 +431,7 @@ class AppState(val store: H2Store) {
                 responseId = outcome.responseId,
                 usage = null,
                 finalEvent = null,
-                incompleteReason = "max_tool_iterations"
+                incompleteReason = outcome.incompleteReason
             )
         }
     }
@@ -443,6 +472,13 @@ class AppState(val store: H2Store) {
     }
 
     companion object {
+        /** Fixed allowance for the tool definitions plus the protocol text a tool turn prepends. */
+        private const val INPUT_OVERHEAD_TOKENS = 2000
+        /** Floor so a small budget still lets the loop make at least one modest request. */
+        private const val MIN_CONTEXT_CEILING_TOKENS = 1024
+        /** Turns kept verbatim after an automatic compaction; the rest folds into the summary. */
+        private const val AUTO_COMPACT_KEEP_LAST = 4
+
         /**
          * The data directory. Defaults to a per-user location that does not depend
          * on the working directory: a packaged macOS app is launched by Finder with

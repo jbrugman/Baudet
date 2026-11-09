@@ -141,6 +141,46 @@ class ToolLoopSpec : BehaviorSpec({
         }
     }
 
+    given("a chained session that already outgrew the context ceiling") {
+        // Under a server session the backend replays and grows its own context, so the client
+        // cannot trim its way around a doomed request; the loop must stop before spending a turn.
+        val source = Scripted(listOf(turn(callText("noop"), "r1")))
+        val loop = ToolLoop(
+            source, registry, extractor, maxIterations = 4,
+            chainResponseId = true, contextCeiling = 10
+        )
+        `when`("running with a transcript already over the ceiling") {
+            val outcome = loop.run(
+                listOf(Msg("user", "x".repeat(3_000))), previousResponseId = "prev", ctx = ctx
+            )
+            then("it stops as CapReached naming the context limit") {
+                (outcome is LoopOutcome.CapReached) shouldBe true
+                (outcome as LoopOutcome.CapReached).incompleteReason shouldBe "context_limit"
+                outcome.steps.isEmpty() shouldBe true
+            }
+            then("it never fired the doomed request") {
+                source.seen.isEmpty() shouldBe true
+            }
+        }
+    }
+
+    given("an over-long transcript that is not chained") {
+        // The client replays and trims what it sends when not chaining, so a big transcript is
+        // its own problem to bound: the ceiling must be ignored and the turn must still run.
+        val source = Scripted(listOf(turn("nothing to do", "r1")))
+        val loop = ToolLoop(
+            source, registry, extractor, maxIterations = 4,
+            chainResponseId = false, contextCeiling = 10
+        )
+        `when`("running with the same big transcript") {
+            val outcome = loop.run(listOf(Msg("user", "x".repeat(3_000))), ctx = ctx)
+            then("the ceiling is ignored and the request still goes out") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                source.seen.isNotEmpty() shouldBe true
+            }
+        }
+    }
+
     given("a model that only answers after the iteration cap") {
         val source = Scripted(listOf(turn(callText("noop"), "r1"), turn("settled", "r2")))
         val loop = ToolLoop(source, registry, extractor, maxIterations = 1)

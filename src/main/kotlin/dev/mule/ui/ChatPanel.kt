@@ -206,18 +206,23 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.text = msg
     }
 
+    /**
+     * The pre-send refusal, now raised off the EDT after an auto-compaction that still left the
+     * conversation over budget. The prompt is already echoed (the turn lock is held), so show the
+     * reason inline, surface it in the status, and release the lock. Nothing reached the backend.
+     */
+    private fun overBudget(reason: String) {
+        append("\n" + reason + "\n\n", error)
+        fail(reason)
+        setBusy(false)
+    }
+
     private fun send() {
         if (busy) return
         val text = input.text.trim()
         if (text.isEmpty()) return
         if (state.config.model.isBlank()) {
             fail(Texts[Key.PickModelFirst])
-            return
-        }
-        // Refuse before anything leaves the machine: the text stays in the box, nothing is
-        // echoed into the transcript, and the status line says what to do about it.
-        state.contextGuard()?.let {
-            fail(it)
             return
         }
         beginTurn(text)
@@ -227,6 +232,14 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val render = TurnRender()
         Thread {
             try {
+                // Compaction is a model call, so it runs here rather than on the EDT: a
+                // conversation that would not fit gets folded away before it is refused. Only
+                // when it still will not fit after that do we tell the user, with nothing sent.
+                state.autoCompactIfNeeded()
+                state.contextGuard()?.let { reason ->
+                    SwingUtilities.invokeLater { overBudget(reason) }
+                    return@Thread
+                }
                 val turn = state.send(text, render::delta, render::reasoning)
                 SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
@@ -259,8 +272,15 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             turn.finalEvent == "response.incomplete"
         if (incomplete) {
             val reason = turn.incompleteReason
-            fail((if (reason != null) Texts.fmt(Key.Truncated, reason)
-            else Texts[Key.TruncatedUnknown]) + " · " + counts)
+            // A loop that stopped at the context ceiling is not a truncation of an answer: it
+            // never fired the doomed request. Point at Compact, the same wording a refused
+            // overflow gets, so the user knows the way out rather than a bare reason token.
+            val label = when {
+                reason == "context_limit" -> Texts[Key.ContextOverflow]
+                reason != null -> Texts.fmt(Key.Truncated, reason)
+                else -> Texts[Key.TruncatedUnknown]
+            }
+            fail(label + " · " + counts)
         } else {
             status.text = counts
         }
