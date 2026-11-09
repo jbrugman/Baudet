@@ -16,6 +16,8 @@ import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
 import dev.mule.tool.CallExtractor
 import dev.mule.tool.EditFileTool
+import dev.mule.tool.ExecuteTool
+import dev.mule.tool.GitTool
 import dev.mule.tool.ReadFileTool
 import dev.mule.tool.LoopOutcome
 import dev.mule.tool.PromptedCallExtractor
@@ -86,12 +88,51 @@ class AppState(val store: H2Store) {
      */
     var approveEdit: (relativePath: String, diff: String) -> Boolean = { _, _ -> false }
 
+    /**
+     * The run equivalent of [approveEdit]. A command is shown for confirmation and, unlike
+     * an edit, it stays required even in Auto mode: a subprocess cannot be fenced by the
+     * folder boundary, so the human is the only real guard. Default deny, so an unattended
+     * loop never runs a command on its own.
+     */
+    var approveCommand: (command: String, workingDir: String, timeoutSeconds: Int) -> Boolean =
+        { _, _, _ -> false }
+
     fun saveConfig(next: AppConfig) {
         config = next
         store.save(next)
         session.model = next.model
         Texts.language = Texts.parse(next.language)
         onConfigSaved(next)
+    }
+
+    /**
+     * Persist only the window geometry and the two remembered split widths. Unlike
+     * [saveConfig] this never fires [onConfigSaved], so storing layout when the window
+     * closes cannot trigger a panel rebuild or a feedback loop.
+     */
+    fun updateWindowGeometry(x: Int, y: Int, w: Int, h: Int, left: Int, right: Int) {
+        config = config.copy(
+            windowX = x,
+            windowY = y,
+            windowWidth = w,
+            windowHeight = h,
+            leftDivider = left,
+            rightDivider = right
+        )
+        store.save(config)
+    }
+
+    /**
+     * Remember where and how big the user left the diff viewer, so the next patch reopens
+     * there instead of re-centering at the small default. Like [updateWindowGeometry] it
+     * rides in the same single-row JSON blob, so no schema is touched.
+     */
+    fun updateDiffPopupBounds(x: Int, y: Int, width: Int, height: Int) {
+        config = config.copy(
+            diffPopupX = x, diffPopupY = y,
+            diffPopupWidth = width, diffPopupHeight = height
+        )
+        store.save(config)
     }
 
     /** Start a new conversation in the currently selected project, if any. */
@@ -188,7 +229,8 @@ class AppState(val store: H2Store) {
         if (config.toolMode == ToolMode.Off) return ToolGate.Disabled
         val project = currentProject(s) ?: return ToolGate.NoProject
         if (project.folderPath.isNullOrBlank()) return ToolGate.NoFolder
-        if (!project.isGranted(FolderPermission.Write)) return ToolGate.NoWrite
+        if (!project.isGranted(FolderPermission.Write) && !project.isGranted(FolderPermission.Execute))
+            return ToolGate.NoWrite
         return ToolGate.Active
     }
 
@@ -288,18 +330,29 @@ class AppState(val store: H2Store) {
         onReasoning: (String) -> Unit
     ): Turn {
         val project = currentProject(s)
-            ?: error("runToolTurn invoked without a writable project") // toolsActive() has gated this
+            ?: error("runToolTurn invoked without a gated project") // toolsActive() has gated this
+        val writable = project.isGranted(FolderPermission.Write)
+        val executable = project.isGranted(FolderPermission.Execute)
+        val readGranted = project.isGranted(FolderPermission.Read)
         val context = ToolContext(
             root = Paths.get(project.folderPath!!),
-            writeGranted = true,
-            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit
+            writeGranted = writable,
+            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
+            execGranted = executable,
+            approveCommand = approveCommand,
+            readGranted = readGranted
         )
         // The wire format is model-facing, so it joins the English system prompt only
         // when tools are live; a plain or tool-less turn never mentions it.
         val system = instructionsFor(s) + "\n\n" + CallExtractor.PROTOCOL
         val loop = ToolLoop(
             turnSource = ResponsesTurnSource(ResponsesClient(config), system),
-            registry = ToolRegistry(listOf(EditFileTool(), ReadFileTool())),
+            registry = ToolRegistry(buildList {
+                add(ReadFileTool())
+                if (writable) add(EditFileTool())
+                if (executable) add(ExecuteTool())
+                if (readGranted) add(GitTool())
+            }),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
             chainResponseId = config.useServerSession && s.previousResponseId != null

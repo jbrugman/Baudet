@@ -67,11 +67,10 @@ class EditFileTool : Tool {
         val edits = parseEdits(args.arr("edits"))
         if (edits.isEmpty()) return fail("needs at least one edit")
 
-        val resolved = root.resolve(rel).normalize()
-        if (!resolved.startsWith(root)) return fail("$rel resolves outside the project folder")
-        if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder.${FolderListing.hint(root)}")
-        if (FolderBoundary.realWithin(root, resolved) == null)
-            return fail("$rel resolves outside the folder once links are followed")
+        val resolved = when (val r = FolderBoundary.resolveFileWithin(root, rel)) {
+            is FolderBoundary.Resolved.Inside -> r.path
+            is FolderBoundary.Resolved.Refused -> return fail(r.reason)
+        }
 
         val original = try {
             Files.readString(resolved)
@@ -81,12 +80,13 @@ class EditFileTool : Tool {
 
         return when (val outcome = PatchApplier.apply(original, edits)) {
             is Rejected -> fail(outcome.reason)
-            is Applied -> writeIfApproved(ctx, resolved, rel, original, outcome.content)
+            is Applied -> writeIfApproved(ctx, root, resolved, rel, original, outcome.content)
         }
     }
 
     private fun writeIfApproved(
         ctx: ToolContext,
+        root: Path,
         resolved: Path,
         rel: String,
         original: String,
@@ -103,7 +103,6 @@ class EditFileTool : Tool {
                 diff = diff
             )
         }
-        val root = ctx.root ?: return fail("no project folder is linked to write into")
         val safe = FolderBoundary.realWithin(root, resolved)
             ?: return fail("$rel resolves outside the folder once links are followed")
         val current = try {

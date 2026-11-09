@@ -105,6 +105,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     ),
     EditReviewTitle("review change", "wijziging controleren", "vérifier la modification", "Änderung prüfen"),
     EditReviewPrompt("allow Mule to write to {0}?", "Mule toestaan om {0} te schrijven?", "autoriser Mule à écrire dans {0} ?", "Mule erlauben, {0} zu schreiben?"),
+    RunReviewTitle("run command", "commando uitvoeren", "exécuter la commande", "Befehl ausführen"),
+    RunReviewPrompt("run this command in {0} (timeout {1}s)?", "voer dit commando uit in {0} (timeout {1}s)?", "exécuter cette commande dans {0} (délai {1} s) ?", "dieses Kommando in {0} ausführen (Timeout {1} s)?"),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
     ErrMaxTokens("max output tokens is not a positive number", "max output tokens is geen positief getal", "le nombre maximal de jetons de sortie n'est pas un nombre positif", "max. Ausgabetoken ist keine positive Zahl"),

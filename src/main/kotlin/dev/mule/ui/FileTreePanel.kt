@@ -18,6 +18,7 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import javax.swing.BorderFactory
@@ -235,17 +236,30 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         val rel = gitRel(path)
         if (rel.isEmpty()) return
         if (!gitStatus.isRepository) {
-            DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit])
+            DiffViewDialog.open(
+                tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit],
+                state.config.diffPopupX, state.config.diffPopupY,
+                state.config.diffPopupWidth, state.config.diffPopupHeight
+            ) { x, y, w, h -> state.updateDiffPopupBounds(x, y, w, h) }
             return
         }
         val patch = git.diffPatch(root, rel)
         val body = when {
             patch.isNotEmpty() -> patch
-            changeFor(path) == FileChange.Untracked -> Texts.fmt(Key.DiffUntracked, rel)
+            changeFor(path) == FileChange.Untracked ->
+                NewFileDiff.body(rel, Texts.fmt(Key.DiffUntracked, rel), readBytesOrNull(path))
             else -> Texts.fmt(Key.DiffNoChanges, rel)
         }
-        DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), body)
+        DiffViewDialog.open(
+            tree, Texts.fmt(Key.DiffTitle, rel), body,
+            state.config.diffPopupX, state.config.diffPopupY,
+            state.config.diffPopupWidth, state.config.diffPopupHeight
+        ) { x, y, w, h -> state.updateDiffPopupBounds(x, y, w, h) }
     }
+
+    /** The bytes of [path] when it is a regular file, else null so [NewFileDiff] keeps just the message. */
+    private fun readBytesOrNull(path: Path): ByteArray? =
+        if (Files.isRegularFile(path)) runCatching { Files.readAllBytes(path) }.getOrNull() else null
 
     // ---- pointer resolution ------------------------------------------------
 

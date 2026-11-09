@@ -4,6 +4,7 @@ import com.formdev.flatlaf.FlatDarkLaf
 import dev.mule.api.CapabilityProbe
 import dev.mule.api.ModelsClient
 import dev.mule.app.AppState
+import dev.mule.config.AppConfig
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.ui.AppIcon
@@ -13,10 +14,15 @@ import dev.mule.ui.ProjectSidebar
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
 import dev.mule.ui.SidebarToggleIcon
+import dev.mule.ui.WindowLayout
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Font
+import java.awt.GraphicsEnvironment
 import java.awt.Insets
+import java.awt.Rectangle
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.nio.file.Path
 import javax.swing.BorderFactory
 import javax.swing.JButton
@@ -58,33 +64,54 @@ fun main(args: Array<String>) {
     SwingUtilities.invokeLater {
         val frame = JFrame("Mule · local coding-assistant")
         frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
-        frame.size = Dimension(1040, 720)
-        frame.setLocationRelativeTo(null)
+        applySavedSize(frame, state.config)
         frame.iconImages = AppIcon.images()
 
         var shown = Texts.language
-        show(state, frame)
+        var layout = show(state, frame, null)
 
         // Settings is the only place the language changes, and only through its own
         // button, so this cannot loop: the panels are rebuilt exactly when the
-        // persisted value actually differs from the language on screen.
+        // persisted value actually differs from the language on screen. A rebuild keeps
+        // the split widths the user just had instead of snapping them back to defaults.
         state.onConfigSaved = {
             if (Texts.language != shown) {
                 shown = Texts.language
-                SwingUtilities.invokeLater { show(state, frame) }
+                val previous = layout
+                SwingUtilities.invokeLater { layout = show(state, frame, previous) }
             }
         }
 
         // Ask mode reaches back through AppState for a real decision; Auto bypasses it
         // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
         state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
+        state.approveCommand = { command, cwd, timeout -> confirmRun(frame, command, cwd, timeout) }
+
+        // Remember the window and both split widths when the window closes. A collapsed
+        // side stays out of the saved geometry, so reopening never restores a hidden panel.
+        frame.addWindowListener(object : WindowAdapter() {
+            override fun windowClosing(e: WindowEvent) {
+                state.updateWindowGeometry(
+                    frame.x, frame.y, frame.width, frame.height,
+                    clampedDivider(layout.left, state.config.leftDivider),
+                    clampedDivider(layout.right, state.config.rightDivider)
+                )
+            }
+        })
 
         frame.isVisible = true
+        // Position is restored only after the window is shown: on macOS a location set
+        // before the native peer exists is ignored, so the window kept landing at the same
+        // cascade point each launch even though its size remembered fine.
+        applySavedLocation(frame, state.config)
     }
 }
 
+/** The two live split panes, kept so a rebuild can carry their current widths across. */
+private data class MainLayout(val left: JSplitPane, val right: JSplitPane)
+
 /** (Re)build every panel in the active language and put it on screen. */
-private fun show(state: AppState, frame: JFrame) {
+private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLayout {
     val chat = ChatPanel(state)
     val settings = SettingsPanel(state)
     val models = ModelsPanel(state) {
@@ -117,13 +144,14 @@ private fun show(state: AppState, frame: JFrame) {
     // Two splits, three panels: [sidebar | tabs] on the left, those as a whole beside the
     // file tree. Each toolbar toggle owns one divider, so either side panel collapses on its own.
     val left = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
-        dividerLocation = 280
-        resizeWeight = 0.2
+        dividerLocation = WindowLayout.resolveDivider(previous?.left?.dividerLocation, state.config.leftDivider, 280)
+        resizeWeight = 0.0            // the sidebar keeps its width; the chat absorbs resizing,
+                                     // so hiding the file tree never widens the sidebar
         isContinuousLayout = true
         isOneTouchExpandable = false   // replaced by the toolbar toggle, which stays put when collapsed
     }
     val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, files).apply {
-        dividerLocation = 720
+        dividerLocation = WindowLayout.resolveDivider(previous?.right?.dividerLocation, state.config.rightDivider, 720)
         resizeWeight = 1.0             // the file tree keeps its width; the chat absorbs resizing
         isContinuousLayout = true
         isOneTouchExpandable = false
@@ -145,6 +173,49 @@ private fun show(state: AppState, frame: JFrame) {
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
+    return MainLayout(left, split)
+}
+
+/**
+ * Size the frame from saved geometry before the panels are built, so the split dividers
+ * lay out against the width the user left the window at. A zero size means nothing was
+ * stored, which is the first launch, so it opens at a centered default. Placement is kept
+ * separate and applied after the window is shown, in [applySavedLocation]. No maximized
+ * state is kept: restoring one behaves inconsistently across window managers.
+ */
+private fun applySavedSize(frame: JFrame, config: AppConfig) {
+    val width = config.windowWidth
+    val height = config.windowHeight
+    frame.size = if (width <= 0 || height <= 0) Dimension(1040, 720) else Dimension(width, height)
+}
+
+/**
+ * Place the frame where the user left it, once it is displayable. Run after the window is
+ * shown, because a location set before the native peer exists is ignored on macOS and the
+ * window would otherwise reopen at the same default spot every launch. A remembered spot
+ * that no longer intersects any screen, or none stored at all, falls back to center.
+ */
+private fun applySavedLocation(frame: JFrame, config: AppConfig) {
+    val width = config.windowWidth
+    val height = config.windowHeight
+    if (width <= 0 || height <= 0) {
+        frame.setLocationRelativeTo(null)
+        return
+    }
+    val saved = Rectangle(config.windowX, config.windowY, width, height)
+    val visible = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+    if (visible.intersects(saved)) frame.setLocation(config.windowX, config.windowY)
+    else frame.setLocationRelativeTo(null)
+}
+
+/**
+ * The width worth saving for one split: its live divider, unless that divider is collapsed
+ * or unset -- zero, or at or past the far edge -- in which case the previously stored value
+ * is kept so a collapse never becomes the reopened default.
+ */
+private fun clampedDivider(split: JSplitPane, stored: Int): Int {
+    val location = split.dividerLocation
+    return if (location <= 0 || location >= split.width) stored else location
 }
 
 /**
@@ -171,6 +242,40 @@ private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
                 owner,
                 arrayOf<Any>(prompt, scroll),
                 Texts[Key.EditReviewTitle],
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            ) == JOptionPane.YES_OPTION
+        }
+    } catch (_: Exception) {
+        approved = false
+    }
+    return approved
+}
+
+/**
+ * Mirrors [confirmEdit] for a run request: modal to the frame, blocking the worker, and
+ * denying on any failure. The command is shown verbatim in a monospaced area so the user
+ * sees exactly what will execute, with the working directory and timeout carried in the
+ * prompt. Approval is required even in Auto mode because running a command is the one
+ * action the folder boundary cannot fence for us.
+ */
+private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): Boolean {
+    var approved = false
+    try {
+        SwingUtilities.invokeAndWait {
+            val prompt = JTextArea(Texts.fmt(Key.RunReviewPrompt, workingDir, timeoutSeconds)).apply {
+                isEditable = false
+                isOpaque = false
+            }
+            val preview = JTextArea(command).apply {
+                isEditable = false
+                font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+            }
+            val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 200) }
+            approved = JOptionPane.showConfirmDialog(
+                owner,
+                arrayOf<Any>(prompt, scroll),
+                Texts[Key.RunReviewTitle],
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.QUESTION_MESSAGE
             ) == JOptionPane.YES_OPTION
