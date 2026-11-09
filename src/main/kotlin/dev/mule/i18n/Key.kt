@@ -70,8 +70,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     ApiKeyLabel("api-key", "api-key", "clé d'API", "API-Schlüssel"),
     OrEnvVar("or env-var", "of env-var", "ou variable d'env.", "oder Umgebungsvariable"),
     ModelLabel("model", "model", "modèle", "Modell"),
-    MaxTokensLabel("max output tokens", "max output tokens", "jetons de sortie max", "max. Ausgabetoken"),
-    ContextBudgetLabel("context budget (tokens)", "context-budget (tokens)", "budget de contexte (jetons)", "Kontextbudget (Token)"),
+    MaxTokensLabel("max output tokens (0 = server)", "max output tokens (0 = server)", "jetons de sortie max (0 = serveur)", "max. Ausgabetoken (0 = Server)"),
+    ContextBudgetLabel("context budget (tokens, 0 = off)", "context-budget (tokens, 0 = uit)", "budget de contexte (jetons, 0 = désactivé)", "Kontextbudget (Token, 0 = aus)"),
     TemperatureLabel("temperature", "temperature", "température", "Temperatur"),
     TopPLabel("top_p (blank = do not send)", "top_p (leeg = niet sturen)", "top_p (vide = ne pas envoyer)", "top_p (leer = nicht senden)"),
     ReasoningEffortLabel("reasoning-effort", "reasoning-effort", "effort de raisonnement", "Begründungsaufwand"),
@@ -90,6 +90,30 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Verwerp niet-opgeslagen wijzigingen en vul het formulier opnieuw vanuit de laatst opgeslagen instellingen.", "Ignorez les modifications non enregistrées et rechargez le formulaire depuis les derniers paramètres enregistrés.", "Nicht gespeicherte Änderungen verwerfen und das Formular aus den zuletzt gespeicherten Einstellungen neu ausfüllen."),
     TipLanguage("Interface language; applied when you press Save.",
         "Taal van de interface; toegepast zodra u Opslaan drukt.", "Langue de l'interface ; appliquée lorsque vous enregistrez.", "Sprache der Oberfläche; wird beim Speichern angewendet."),
+    TipMaxTokens(
+        "Upper bound on the tokens the model may generate in one turn. 0 or blank leaves that to the server, which applies the model's own limit.",
+        "Bovengrens voor de tokens die het model in één beurt mag genereren. Bij 0 of leeg bepaalt de server dat, naar de eigen limiet van het model.",
+        "Limite supérieure des jetons que le modèle peut générer en un tour. À 0 ou vide, le serveur décide et applique la propre limite du modèle.",
+        "Obergrenze für die Token, die das Modell in einer Runde erzeugen darf. Bei 0 oder leer entscheidet das Server und wendet die eigene Grenze des Modells an."
+    ),
+    TipContextBudget(
+        "A client-side estimate only: it fills the token bar and the compact warning. Nothing of it is sent to the server, and the real context window is never asked for. 0 or blank hides the budget.",
+        "Alleen een schatting aan de kant van de client: hij vult de tokenbalk en de compactwaarschuwing. Er gaat niets davon naar de server en de echte contextgrootte wordt nooit opgevraagd. Bij 0 of leeg valt het budget weg.",
+        "Une estimation côté client uniquement : elle remplit la barre de jetons et l'avertissement de compression. Rien n'en est envoyé au serveur et la vraie fenêtre de contexte n'est jamais demandée. À 0 ou vide, le budget disparaît.",
+        "Nur eine Schätzung auf Client-Seite: sie füllt die Token-Leiste und die Kompaktwarnung. Nichts davon wird an den Server gesendet, und die echte Kontextgröße wird nie abgefragt. Bei 0 oder leer entfällt das Budget."
+    ),
+    ContextTooLong(
+        "not sent: the conversation is estimated at {0} tokens, past the budget of {1}. Compact it, start a new conversation, or raise the budget.",
+        "niet verzonden: het gesprek wordt geschat op {0} tokens, voorbij het budget van {1}. Compact het, start een nieuw gesprek, of verhoog het budget.",
+        "non envoyé : la conversation est estimée à {0} jetons, au-delà du budget de {1}. Compactez-la, démarrez une nouvelle conversation ou relevez le budget.",
+        "nicht gesendet: die Unterhaltung wird auf {0} Token geschätzt, über dem Budget von {1}. Kompaktieren Sie sie, starten Sie eine neue Unterhaltung oder erhöhen Sie das Budget."
+    ),
+    ContextOverflow(
+        "the prompt no longer fits the model's context window. Compact this conversation (the Compact button folds it in batches, so it works even now), or start a new conversation.",
+        "de prompt past niet meer in het contextvenster van het model. Compact dit gesprek (de knop Compacten vouwt het in delen, dus dat lukt nu ook), of start een nieuw gesprek.",
+        "le prompt ne tient plus dans la fenêtre de contexte du modèle. Compactez cette conversation (le bouton Compresseur la replie par lots, il fonctionne donc encore) ou démarrez une nouvelle conversation.",
+        "der Prompt passt nicht mehr in das Kontextfenster des Modells. Kompaktieren Sie diese Unterhaltung (die Schaltfläche Kompaktieren faltet sie in Portionen, das gelingt jetzt auch) oder starten Sie eine neue Unterhaltung."
+    ),
     // ---- tools (settings) ---------------------------------------------------
     ToolModeLabel("tool mode", "toolmodus", "mode d'outil", "Werkzeugmodus"),
     ToolModeOff("off", "uit", "inactif", "aus"),
@@ -109,8 +133,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     RunReviewPrompt("run this command in {0} (timeout {1}s)?", "voer dit commando uit in {0} (timeout {1}s)?", "exécuter cette commande dans {0} (délai {1} s) ?", "dieses Kommando in {0} ausführen (Timeout {1} s)?"),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
-    ErrMaxTokens("max output tokens is not a positive number", "max output tokens is geen positief getal", "le nombre maximal de jetons de sortie n'est pas un nombre positif", "max. Ausgabetoken ist keine positive Zahl"),
-    ErrContextBudget("context budget is not a positive number", "context-budget is geen positief getal", "le budget de contexte n'est pas un nombre positif", "Kontextbudget ist keine positive Zahl"),
+    ErrMaxTokens("max output tokens must be 0 or a positive number", "max output tokens moet 0 of een positief getal zijn", "les jetons de sortie max doivent être 0 ou un nombre positif", "max. Ausgabetoken muss 0 oder eine positive Zahl sein"),
+    ErrContextBudget("context budget must be 0 or a positive number", "context-budget moet 0 of een positief getal zijn", "le budget de contexte doit être 0 ou un nombre positif", "Kontextbudget muss 0 oder eine positive Zahl sein"),
     ErrTemperature("temperature must be between 0 and 2", "temperature moet tussen 0 en 2", "la température doit être comprise entre 0 et 2", "Temperatur muss zwischen 0 und 2 liegen"),
     ErrTopP("top_p must be between 0 (exclusive) and 1, or blank", "top_p moet tussen 0 (excl) en 1, of leeg", "top_p doit être entre 0 (exclus) et 1, ou vide", "top_p muss zwischen 0 (ausschließlich) und 1 sein, oder leer"),
     ErrBaseUrl("base url must start with http:// or https://", "basis-url moet met http:// of https:// beginnen", "l'url de base doit commencer par http:// ou https://", "Basis-URL muss mit http:// oder https:// beginnen"),

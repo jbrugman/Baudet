@@ -25,6 +25,7 @@ import dev.mule.tool.ResponsesTurnSource
 import dev.mule.tool.ToolContext
 import dev.mule.tool.ToolLoop
 import dev.mule.tool.ToolRegistry
+import dev.mule.tool.Transcript
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -208,6 +209,27 @@ class AppState(val store: H2Store) {
     /** Rename one conversation; a blank title reverts to the derived first-line title. */
     fun renameSession(id: String, title: String) = store.renameSession(id, title)
 
+    /**
+     * Why this conversation must not go out as it stands, or null when it may. The estimate is
+     * the same one the status line shows, so the number the user sees and the number that stops
+     * the send cannot disagree. This refuses before the request rather than after the backend's
+     * answer: a prompt that is too long never reaches the model, so nothing is billed, nothing
+     * streams into the panel, and the text the user typed stays in the input box. It measures the
+     * conversation rather than the request, because a server-side session replays the stored
+     * turns itself -- that is exactly how a chained session outgrows the window. The reply's own
+     * budget is held back too, so a conversation is refused a little before the bar reads full.
+     */
+    fun contextGuard(): String? {
+        val budget = config.contextBudgetTokens
+        if (budget <= 0) return null
+        // Reserve the reply: the input must leave the model room to answer, so the ceiling on
+        // the conversation is the budget minus the configured output. 0 output asks the server
+        // to decide and reserves nothing here.
+        val reserve = config.maxOutputTokens.coerceAtLeast(0)
+        val used = session.estimateTokens()
+        return if (used + reserve > budget) Texts.fmt(Key.ContextTooLong, used, budget) else null
+    }
+
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
 
@@ -273,7 +295,7 @@ class AppState(val store: H2Store) {
         val afterPrompt = s.messages.size
         try {
             val turn = if (toolsActive(s)) runToolTurn(s, onDelta, onReasoning)
-            else runPlainTurn(s, userText, onDelta, onReasoning)
+            else runPlainTurn(s, onDelta, onReasoning)
             persistTo(s)
             return turn
         } catch (e: Exception) {
@@ -298,17 +320,18 @@ class AppState(val store: H2Store) {
     /** The one-shot reply this app had before tools: one Responses call, then done. */
     private fun runPlainTurn(
         s: SessionState,
-        userText: String,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
         val prev = if (config.useServerSession) s.previousResponseId else null
-        // The prompt is already the last stored message; drop it from the replayed history
-        // so the client sends it exactly once, as userText, instead of twice.
+        // The prompt is already the last stored message, so Transcript takes it as the current
+        // input and returns only what precedes it: sent once instead of twice, scrubbed, and cut
+        // to what one call can carry, which is the same bound the tool loop runs under.
+        val (prior, prompt) = Transcript.forCall(s.promptHistory())
         val turn = ResponsesClient(config).turn(
             system = instructionsFor(s),
-            history = s.promptHistory().dropLast(1),
-            userText = userText,
+            history = prior,
+            userText = prompt,
             previousResponseId = prev,
             onDelta = onDelta,
             onReasoning = onReasoning

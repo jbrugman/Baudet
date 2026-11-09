@@ -16,11 +16,11 @@ class SessionState(
     /** The project this conversation belongs to; null means the Unassigned bucket. */
     var projectId: String? = null
 
-    /** Rough heuristic (~4 chars/token). No tokenizer: those are model-specific. */
+    /** Rough heuristic (~3 chars/token). No tokenizer: those are model-specific. */
     fun estimateTokens(): Long {
         var chars = summary?.length ?: 0
         messages.forEach { chars += it.content.length + it.role.length + 8 }
-        return chars / 4L
+        return chars / 3L
     }
 
     /**

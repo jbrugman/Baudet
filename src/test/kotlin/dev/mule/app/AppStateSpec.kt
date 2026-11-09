@@ -164,6 +164,46 @@ class AppStateSpec : BehaviorSpec({
         }
     }
 
+    /**
+     * The guard that keeps an oversized conversation from being sent at all. It has to agree with
+     * the number the status line shows, or the user is refused for a reason the app never
+     * displayed, and it has to stay silent when the budget is switched off.
+     */
+    given("a conversation over the configured context budget") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 100))
+        state.session.messages.add(Msg("user", "a".repeat(4_000)))
+        `when`("asking whether this may be sent") {
+            val reason = state.contextGuard()
+            then("it is refused, naming both the estimate and the budget") {
+                (reason != null) shouldBe true
+                // The refusal must name the very number the status line shows, not another.
+                (reason!!.contains(state.session.estimateTokens().toString())) shouldBe true
+                (reason!!.contains("100")) shouldBe true
+            }
+        }
+    }
+
+    given("a conversation inside the budget") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 100_000))
+        state.session.messages.add(Msg("user", "short question"))
+        `when`("asking whether this may be sent") {
+            then("nothing holds it back") { state.contextGuard() shouldBe null }
+        }
+    }
+
+    given("a budget of zero, meaning the guard is off") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 0))
+        state.session.messages.add(Msg("user", "a".repeat(400_000)))
+        `when`("asking whether this may be sent") {
+            then("the estimate is not consulted, so the user decides") {
+                state.contextGuard() shouldBe null
+            }
+        }
+    }
+
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
             val state = freshState()

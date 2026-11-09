@@ -30,7 +30,17 @@ class Captured(val text: String, val truncated: Boolean, val length: Int) {
 object ProcessRunner {
 
     private const val JOIN_MILLIS = 1_000L
-    private const val CAP_BYTES = 64 * 1024
+
+    /** Bytes kept from the start of a stream: the command echo and any early diagnosis. */
+    private const val HEAD_BYTES = 8 * 1024
+
+    /**
+     * Bytes kept from the end of a stream. A build or test failure reports at the end, so a
+     * head-only cap would keep the boilerplate and drop the one line the model needs; the tail
+     * is what makes a capped run useful. The cap is the two together.
+     */
+    private const val TAIL_BYTES = 8 * 1024
+    private const val CAP_BYTES = HEAD_BYTES + TAIL_BYTES
 
     /** The outcome of a run: the exit code (null on timeout), the timeout flag and both streams. */
     class Result(
@@ -80,24 +90,51 @@ object ProcessRunner {
         return Result(exit, timedOut, out, err)
     }
 
-    /** Drains [input] fully while keeping only [CAP_BYTES], so a chatty process cannot hang or flood. */
+    /**
+     * Drains [input] fully while keeping the front and the back, so a chatty process can
+     * neither hang the pipe nor flood the context, and a failure that reports at the end is
+     * still seen. [HEAD_BYTES] are kept from the front and [TAIL_BYTES] from the back; the
+     * dropped middle is replaced by a marker naming how many bytes it held. When the whole
+     * stream already fits, nothing is dropped and the marker never appears.
+     */
     private fun readCapped(input: InputStream): Captured {
         val buffer = ByteArray(8192)
-        val kept = ByteArrayOutputStream()
+        val front = ByteArrayOutputStream()   // the first CAP_BYTES, so the kept head is intact
+        val tail = ArrayDeque<ByteArray>()    // a rolling window of the last TAIL_BYTES
+        var tailSize = 0
         var total = 0
-        var truncated = false
         while (true) {
             val n = runCatching { input.read(buffer) }.getOrDefault(-1)
             if (n < 0) break
             total += n
-            if (kept.size() < CAP_BYTES) {
-                val room = CAP_BYTES - kept.size()
-                kept.write(buffer, 0, minOf(n, room))
-                if (total > CAP_BYTES) truncated = true
-            } else {
-                truncated = true
+            if (front.size() < CAP_BYTES) {
+                val room = CAP_BYTES - front.size()
+                front.write(buffer, 0, minOf(n, room))
+            }
+            tail.addLast(buffer.copyOf(n))
+            tailSize += n
+            while (tailSize > TAIL_BYTES && tail.size > 1) {
+                tailSize -= tail.removeFirst().size
             }
         }
-        return Captured(kept.toString(Charsets.UTF_8), truncated, total)
+        val truncated = total > CAP_BYTES
+        return Captured(render(front, tail, total, truncated), truncated, total)
+    }
+
+    /** The kept text: the whole stream when it fits, otherwise head + omission marker + tail. */
+    private fun render(
+        front: ByteArrayOutputStream,
+        tail: ArrayDeque<ByteArray>,
+        total: Int,
+        truncated: Boolean
+    ): String {
+        val all = front.toString(Charsets.UTF_8)
+        if (!truncated) return all
+        val tailText = buildString { tail.forEach { append(String(it, Charsets.UTF_8)) } }
+        val head = all.substring(0, minOf(HEAD_BYTES, all.length))
+        val omitted = (total - head.toByteArray(Charsets.UTF_8).size -
+            tailText.toByteArray(Charsets.UTF_8).size).coerceAtLeast(0)
+        // Model-facing marker, so English: it is read back as part of the observation.
+        return head + "\n\n[... $omitted bytes omitted ...]\n\n" + tailText
     }
 }

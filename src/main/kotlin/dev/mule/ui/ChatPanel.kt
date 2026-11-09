@@ -1,5 +1,6 @@
 package dev.mule.ui
 
+import dev.mule.api.BackendException
 import dev.mule.api.Turn
 import dev.mule.app.AppState
 import dev.mule.app.ToolGate
@@ -213,6 +214,12 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             fail(Texts[Key.PickModelFirst])
             return
         }
+        // Refuse before anything leaves the machine: the text stays in the box, nothing is
+        // echoed into the transcript, and the status line says what to do about it.
+        state.contextGuard()?.let {
+            fail(it)
+            return
+        }
         beginTurn(text)
 
         // A fresh renderer per turn keeps the reasoning/answer labeling scoped to
@@ -261,10 +268,20 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         onSessionsChanged()
     }
 
-    /** Surface a failed turn on the EDT: the error inline, the cause in the status. */
+    /**
+     * Surface a failed turn on the EDT: the error inline, the cause in the status. A prompt the
+     * model cannot hold gets its own wording, because the backend's JSON names a token count the
+     * user cannot act on: what helps is knowing that Compact is the way out and that it works on
+     * an oversized conversation too.
+     */
     private fun turnFailed(e: Exception) {
         append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
-        fail(Texts[Key.TurnFailed])
+        if (e is BackendException && e.contextOverflow) {
+            append(Texts[Key.ContextOverflow] + "\n\n", error)
+            fail(Texts[Key.ContextOverflow])
+        } else {
+            fail(Texts[Key.TurnFailed])
+        }
         setBusy(false)
     }
 
