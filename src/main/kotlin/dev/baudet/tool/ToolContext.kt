@@ -33,5 +33,13 @@ class ToolContext(
      */
     val autoAllow: () -> Set<String> = { emptySet() },
     /** When true, a command [SafeCommands] recognises as read-only also skips the approval prompt. */
-    val autoApproveSafe: Boolean = false
+    val autoApproveSafe: Boolean = false,
+    /**
+     * Command families the user chose to trust: a command whose [CommandSignature.trustedEntry] value is
+     * one of these skips the approval prompt. Only a single simple command that [SafeCommands.trustedKey]
+     * clears has such a key -- a bare program, or git plus its subcommand, and never a chain, a shell, an
+     * interpreter or a write flag -- so a trusted family cannot reach further than the program the user
+     * named. Handed over as a provider like [autoAllow], so a family pinned mid-turn counts in that turn.
+     */
+    val trustedCommands: () -> Set<String> = { emptySet() }
 )

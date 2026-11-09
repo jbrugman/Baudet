@@ -45,4 +45,23 @@ class WindowLayoutSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a composer that must keep its height") {
+        `when`("placing the divider for a composer height") {
+            then("the transcript keeps the rest of the split") {
+                WindowLayout.dividerForHeight(splitHeight = 600, componentHeight = 120, dividerSize = 10) shouldBe 470
+            }
+            then("a composer taller than the split clamps the divider to the top") {
+                WindowLayout.dividerForHeight(splitHeight = 100, componentHeight = 400, dividerSize = 10) shouldBe 0
+            }
+        }
+        `when`("reading a released drag back as a height") {
+            then("the height is the inverse of the placement") {
+                WindowLayout.componentHeightForDivider(splitHeight = 600, dividerLocation = 470, dividerSize = 10) shouldBe 120
+            }
+            then("a drag past the bottom clamps to zero") {
+                WindowLayout.componentHeightForDivider(splitHeight = 100, dividerLocation = 200, dividerSize = 10) shouldBe 0
+            }
+        }
+    }
 })

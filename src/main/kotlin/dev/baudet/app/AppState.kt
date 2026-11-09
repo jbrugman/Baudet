@@ -25,6 +25,7 @@ import dev.baudet.tool.EditFileTool
 import dev.baudet.tool.ExecuteTool
 import dev.baudet.tool.GitTool
 import dev.baudet.tool.ReadFileTool
+import dev.baudet.tool.SafeCommands
 import dev.baudet.tool.LoopOutcome
 import dev.baudet.tool.PromptedCallExtractor
 import dev.baudet.tool.ResponsesTurnSource
@@ -147,6 +148,33 @@ class AppState(val store: H2Store) {
     }
 
     /**
+     * Remember the height of the reasoning dock so a rebuild, such as a language change, and
+     * the next launch reopen it where the user left it. A non-positive value means never
+     * dragged, which lets the dock fall back to the input's own height. Like
+     * [updateWindowGeometry] it rides in the same single-row JSON blob, so no schema is touched,
+     * and it never fires [onConfigSaved], so storing the dock height cannot trigger a rebuild.
+     */
+    fun rememberReasoningDivider(px: Int) {
+        if (px <= 0) return
+        config = config.copy(reasoningDivider = px)
+        store.save(config)
+    }
+
+    /**
+     * Remember the height of the composer block under the transcript so a rebuild, such as a
+     * language change, and the next launch reopen the split where the user left it. The height
+     * is stored in pixels because it is independent of the window size, so growing the window
+     * keeps the composer put. A non-positive value means never dragged, which lets the split
+     * fall back to the composer's own height. Like [rememberReasoningDivider] it rides in the
+     * same single-row JSON blob and never fires [onConfigSaved], so saving it cannot rebuild.
+     */
+    fun rememberComposerHeight(px: Int) {
+        if (px <= 0) return
+        config = config.copy(composerHeight = px)
+        store.save(config)
+    }
+
+    /**
      * Remember where and how big the user left the diff viewer, so the next patch reopens
      * there instead of re-centering at the small default. Like [updateWindowGeometry] it
      * rides in the same single-row JSON blob, so no schema is touched.
@@ -223,17 +251,93 @@ class AppState(val store: H2Store) {
      * without a prompt -- including the next call of the turn that is running now, since
      * [allowedCommands] is read afresh on every call. What is stored is [CommandSignature.pinned]:
      * a simple command pins to its signature so one decision covers its variations, while a chain
-     * pins to its verbatim text so it is trusted exactly as approved. Persists with [H2Store.save]
-     * alone rather than [saveConfig]: an allow-list change must not fire [onConfigSaved], which
-     * would rebuild the panels for something the running turn reads from config on its next call.
+     * pins to its verbatim text so it is trusted exactly as approved. A command the read-only gate
+     * cannot clear, but whose program is safe to vouch for, additionally gains a family key in
+     * [trustedCommands], so a repeated build or commit stops nagging over its text; a read-only
+     * command already carries a reusable signature and gains no extra family. Persists with
+     * [H2Store.save] alone rather than [saveConfig]: an allow-list change must not fire
+     * [onConfigSaved], which would rebuild the panels for something the running turn reads on its
+     * next call.
      */
     fun allowCommandAlways(command: String) {
         val pinned = CommandSignature.pinned(command)
+        // A provably read-only command already carries a reusable signature in the allow list, so it needs
+        // no family trust as well. Anything else keeps its verbatim pin, and -- when the program is safe to
+        // vouch for -- also gains a family key so the same build or commit stops nagging over its variations.
+        val family = if (SafeCommands.isSafe(command)) null else CommandSignature.trustedEntry(command)
+        var changed = false
         synchronized(config.autoAllowCommands) {
-            if (pinned in config.autoAllowCommands) return
-            config.autoAllowCommands.add(pinned)
+            if (pinned !in config.autoAllowCommands) {
+                config.autoAllowCommands.add(pinned); changed = true
+            }
+        }
+        if (family != null) {
+            synchronized(config.trustedCommands) {
+                if (family !in config.trustedCommands) {
+                    config.trustedCommands.add(family); changed = true
+                }
+            }
+        }
+        if (changed) store.save(config)
+    }
+
+    /** The trusted command families as they stand, copied under the same lock [allowCommandAlways] writes under. */
+    fun trustedCommands(): Set<String> =
+        synchronized(config.trustedCommands) { config.trustedCommands.toSet() }
+
+    /**
+     * Replace the trusted command families with the given lines, keeping order and dropping duplicates and
+     * anything without a safe family key (a chain, a shell, an interpreter or a blank). Each kept line is
+     * canonicalised through [CommandSignature.trustedEntry], so a line typed as a full command collapses to
+     * the family it actually grants, exactly as the Always button would. Returns how many lines were dropped,
+     * so the UI can report them. Persists like [allowCommandAlways], without firing [onConfigSaved].
+     */
+    fun replaceTrustedCommands(lines: List<String>): Int {
+        val kept = ArrayList<String>()
+        var dropped = 0
+        for (raw in lines) {
+            val key = CommandSignature.trustedEntry(raw)
+            if (key == null) { dropped++; continue }
+            if (key in kept) continue
+            kept.add(key)
+        }
+        synchronized(config.trustedCommands) {
+            config.trustedCommands.clear(); config.trustedCommands.addAll(kept)
         }
         store.save(config)
+        return dropped
+    }
+
+    /** Remove one trusted family if present; persists without firing [onConfigSaved]. */
+    fun removeTrustedCommand(family: String) {
+        var removed = false
+        synchronized(config.trustedCommands) { removed = config.trustedCommands.remove(family) }
+        if (removed) store.save(config)
+    }
+
+    /** Drop every trusted family; persists without firing [onConfigSaved]. */
+    fun clearTrustedCommands() {
+        var cleared = false
+        synchronized(config.trustedCommands) {
+            if (config.trustedCommands.isNotEmpty()) { config.trustedCommands.clear(); cleared = true }
+        }
+        if (cleared) store.save(config)
+    }
+
+    /** Remove one always-allow pin if present; persists without firing [onConfigSaved]. */
+    fun removeAllowedCommand(pin: String) {
+        var removed = false
+        synchronized(config.autoAllowCommands) { removed = config.autoAllowCommands.remove(pin) }
+        if (removed) store.save(config)
+    }
+
+    /** Drop every always-allow pin; persists without firing [onConfigSaved]. */
+    fun clearAllowedCommands() {
+        var cleared = false
+        synchronized(config.autoAllowCommands) {
+            if (config.autoAllowCommands.isNotEmpty()) { config.autoAllowCommands.clear(); cleared = true }
+        }
+        if (cleared) store.save(config)
     }
 
     /** Delete a project and every conversation inside it; files on disk are never touched. */
@@ -531,18 +635,36 @@ class AppState(val store: H2Store) {
         val (prior, prompt) =
             if (config.contextStrategy == ContextStrategy.StopAtLimit) Transcript.forCall(outbound(s, shrinkPct))
             else Transcript.splitForWindow(outbound(s, shrinkPct))
-        val turn = ResponsesClient(config).turn(
-            system = instructionsFor(s),
-            history = prior,
-            userText = prompt,
-            previousResponseId = prev,
-            onDelta = onDelta,
-            onReasoning = onReasoning,
-            token = token
-        )
+        val streamed = StringBuilder()
+        val onText: (String) -> Unit = { chunk -> streamed.append(chunk); onDelta(chunk) }
+        val turn = try {
+            ResponsesClient(config).turn(
+                system = instructionsFor(s),
+                history = prior,
+                userText = prompt,
+                previousResponseId = prev,
+                onDelta = onText,
+                onReasoning = onReasoning,
+                token = token
+            )
+        } catch (e: Exception) {
+            // A deliberate stop can surface as a closed-stream IOException rather than a clean cancellation,
+            // so keeping the half answer keys off the stop itself, not the exception type: a stopped stream
+            // keeps its partial so the next instruction can steer, while any other failure keeps nothing and
+            // lets the caller drop the unanswered turn.
+            if (token.isCancelled) persistStoppedPartial(s, streamed.toString())
+            throw e
+        }
         s.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
         if (turn.responseId != null) s.previousResponseId = turn.responseId
         return turn
+    }
+
+    /** Persist the half answer of a deliberately stopped plain turn so the next instruction can steer. */
+    internal fun persistStoppedPartial(s: SessionState, partial: String): Boolean {
+        if (partial.isBlank()) return false
+        s.messages.add(Msg("assistant", partial, null, null))
+        return true
     }
 
     /**
@@ -572,7 +694,8 @@ class AppState(val store: H2Store) {
             approveCommand = approveCommand,
             readGranted = readGranted,
             autoAllow = { allowedCommands() },
-            autoApproveSafe = config.autoApproveSafeCommands
+            autoApproveSafe = config.autoApproveSafeCommands,
+            trustedCommands = { trustedCommands() }
         )
         // Build the enabled tools once, then advertise exactly those in the prompt: the registry
         // and the system prompt must name the same set, or the model is taught to call a tool it

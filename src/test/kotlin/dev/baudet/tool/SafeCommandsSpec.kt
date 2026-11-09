@@ -180,4 +180,87 @@ class SafeCommandsSpec : BehaviorSpec({
             }
         }
     }
+
+    /*
+     * Family trust is the route an Always takes for a build or commit whose text keeps changing, so the
+     * key it stores must be neither broader than the program the user named nor reachable by a shape that
+     * writes. The key is the bare program, or git plus its subcommand; it is withheld for a shell, an
+     * interpreter, a deleting tool, a chain, a path-named program other than a build wrapper, a newline
+     * that separates a second command, a destructive git subcommand, or a
+     * nominally harmless program caught mid-write. A withheld key is what makes a bad hand-typed trusted
+     * entry unable to match a real run, so it falls back to the verbatim pin instead of a broad trust.
+     */
+    given("a command asked for a family-trust key") {
+        val keyed = mapOf(
+            "mvn -B test" to "mvn",
+            "mvn clean verify" to "mvn",
+            "cat notes.txt" to "cat",
+            "git status" to "git status",
+            "git commit -m done" to "git commit",
+            "git push origin main" to "git push",
+            "git branch feature" to "git branch",
+            "  mvn   -B  test  " to "mvn",
+            "./mvnw -Dtest=A test" to "./mvnw",
+            "./gradlew build" to "./gradlew"
+        )
+        val keyless = listOf(
+            // shells, interpreters and payload tools can run anything from one argument
+            "bash -c x", "python3 x.py", "sed -n 1p notes.txt", "awk '{print}' f",
+            // direct destruction and privilege
+            "rm -rf x", "chmod +x script", "sudo ls",
+            // nominally harmless programs caught mid-write
+            "sort -o out in", "find . -delete", "uniq a b",
+            // git that escapes its repository or throws work away
+            "git clean -fd", "git reset --hard", "git log --output=x", "git -c x=y status",
+            // chains and absolute-path programs are never family-trusted
+            "pwd && ls", "/usr/bin/ls",
+            // nothing to key on
+            "", "   "
+        )
+        `when`("a safe family exists") {
+            then("the key is the program, or git plus its subcommand") {
+                keyed.forEach { (cmd, key) -> SafeCommands.trustedKey(cmd) shouldBe key }
+            }
+        }
+        `when`("no family is safe to vouch for") {
+            then("the key is withheld, so a bad trusted entry can never match a real run") {
+                keyless.forEach { SafeCommands.trustedKey(it) shouldBe null }
+            }
+        }
+    }
+
+    /*
+     * Two findings sit on either side of the family key. A newline is a shell command separator, so
+     * vouching for the first line must not silently vouch for a second command riding it. And a project
+     * own ./mvnw or ./gradlew launcher is the usual build a developer reruns, so it should earn the same
+     * family trust a bare mvn or gradle already has -- while every other path stays refused.
+     */
+    given("a family key asked of a newline or a build wrapper") {
+        val nl = 10.toChar().toString()
+        val tab = 9.toChar().toString()
+        `when`("a command rides a second line") {
+            then("the key is withheld, so a trusted first line never vouches for a write on the second") {
+                SafeCommands.trustedKey("git status" + nl + "touch x") shouldBe null
+                SafeCommands.trustedKey("mvn test" + nl + "rm -rf /") shouldBe null
+            }
+            then("horizontal spacing still folds, so a reworded repeat keeps its key") {
+                SafeCommands.trustedKey("cat" + tab + "   notes.txt") shouldBe "cat"
+            }
+        }
+        `when`("the program is a build wrapper") {
+            then("the usual launchers earn family trust by name, so a new build flag does not nag again") {
+                SafeCommands.trustedKey("./mvnw -Dtest=A test") shouldBe "./mvnw"
+                SafeCommands.trustedKey("./gradlew build") shouldBe "./gradlew"
+                SafeCommands.trustedKey("./mvnw -Dtest=B test") shouldBe "./mvnw"
+            }
+            then("every other path stays refused, so no planted or renamed binary borrows a wrapper") {
+                SafeCommands.trustedKey("./bash -c x") shouldBe null
+                SafeCommands.trustedKey("./rm -rf /") shouldBe null
+                SafeCommands.trustedKey("./git status") shouldBe null
+                SafeCommands.trustedKey("/usr/bin/mvn") shouldBe null
+                SafeCommands.trustedKey("../mvnw") shouldBe null
+                SafeCommands.trustedKey("./dir/mvnw") shouldBe null
+            }
+        }
+    }
 })

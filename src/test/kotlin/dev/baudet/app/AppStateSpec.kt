@@ -363,6 +363,46 @@ class AppStateSpec : BehaviorSpec({
     }
 
 
+    given("remembering the reasoning dock height") {
+        val state = freshState()
+        `when`("the user drags the dock divider") {
+            state.rememberReasoningDivider(123)
+            then("the live config keeps the dragged height") {
+                state.config.reasoningDivider shouldBe 123
+            }
+            then("the height is persisted, so a restart keeps it") {
+                state.store.load()?.reasoningDivider shouldBe 123
+            }
+        }
+        `when`("a non-positive height arrives") {
+            state.rememberReasoningDivider(123)
+            state.rememberReasoningDivider(0)
+            then("a reset never overwrites the stored height") {
+                state.config.reasoningDivider shouldBe 123
+            }
+        }
+    }
+
+    given("remembering the composer height") {
+        val state = freshState()
+        `when`("the user drags the composer divider") {
+            state.rememberComposerHeight(180)
+            then("the live config keeps the dragged height") {
+                state.config.composerHeight shouldBe 180
+            }
+            then("the height is persisted, so a restart keeps it") {
+                state.store.load()?.composerHeight shouldBe 180
+            }
+        }
+        `when`("a non-positive height arrives") {
+            state.rememberComposerHeight(180)
+            state.rememberComposerHeight(0)
+            then("a reset never overwrites the stored height") {
+                state.config.composerHeight shouldBe 180
+            }
+        }
+    }
+
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
             val state = freshState()
@@ -411,6 +451,99 @@ class AppStateSpec : BehaviorSpec({
             val state = freshState()
             state.saveConfig(state.config.copy(toolMode = ToolMode.Ask))
             then("the gate names the missing project") { state.toolGate() shouldBe ToolGate.NoProject }
+        }
+    }
+
+    given("allowing a repeating command for good") {
+        // A local model rewords a build or a commit every turn, so a verbatim pin alone keeps nagging.
+        // Allowing one such command must also grant its safe family, while a provably read-only command
+        // needs no family because a reusable signature already covers every variation of the same read.
+        `when`("a build command is allowed always") {
+            val state = freshState()
+            state.allowCommandAlways("mvn clean verify")
+            then("the exact command is pinned verbatim") {
+                (state.allowedCommands().contains("mvn clean verify")) shouldBe true
+            }
+            then("the mvn family is trusted, so a reworded build runs without a prompt") {
+                state.trustedCommands() shouldBe setOf("mvn")
+            }
+        }
+        `when`("a read-only command is allowed always") {
+            val state = freshState()
+            state.allowCommandAlways("cat notes.txt")
+            then("a reusable signature is stored, not the whole command") {
+                (state.allowedCommands().contains("cat")) shouldBe true
+            }
+            then("no family is added, because the signature already covers it") {
+                state.trustedCommands() shouldBe emptySet()
+            }
+        }
+        `when`("a git commit is allowed always") {
+            val state = freshState()
+            state.allowCommandAlways("git commit -m a")
+            then("git commit is trusted as a family") {
+                (state.trustedCommands().contains("git commit")) shouldBe true
+            }
+        }
+        `when`("a git clean is allowed always") {
+            val state = freshState()
+            state.allowCommandAlways("git clean -fd")
+            then("its destructive subcommand is never family-trusted") {
+                state.trustedCommands() shouldBe emptySet()
+            }
+        }
+    }
+
+    given("managing the trusted families from the settings editor") {
+        `when`("a block of lines replaces the list") {
+            val state = freshState()
+            val dropped = state.replaceTrustedCommands(
+                listOf("mvn clean verify", "rm -rf /", "bash -c x", "  mvn test  ")
+            )
+            then("every kept line collapses to the family it actually grants") {
+                state.trustedCommands() shouldBe setOf("mvn")
+            }
+            then("an unsafe name is dropped while its duplicate is only skipped, not counted") {
+                dropped shouldBe 2
+            }
+        }
+        `when`("the stored lists are cleared") {
+            val state = freshState()
+            state.allowCommandAlways("mvn clean verify")
+            state.allowCommandAlways("cat notes.txt")
+            then("clearing trusted empties every family") {
+                state.clearTrustedCommands()
+                state.trustedCommands() shouldBe emptySet()
+            }
+            then("clearing always-allow empties every pin") {
+                state.clearAllowedCommands()
+                state.allowedCommands() shouldBe emptySet()
+            }
+        }
+    }
+
+    /*
+     * Stopping an answer on purpose should leave the steer the user wanted: the question and whatever
+     * had already streamed stay, so the next instruction refines a real half answer instead of a blank
+     * page. The network turn itself is out of scope offline, so this covers the one decision that path
+     * makes on the session -- keep the streamed half, or keep nothing when nothing streamed.
+     */
+    given("a plain turn stopped by the user mid-answer") {
+        val state = freshState()
+        state.session.messages.add(Msg("user", "tell me a long story"))
+        `when`("nothing streamed before the stop") {
+            then("no empty message is added, so the clean prompt stays removable") {
+                state.persistStoppedPartial(state.session, "") shouldBe false
+                state.session.messages.map { it.role } shouldBe listOf("user")
+            }
+        }
+        `when`("a partial answer had streamed") {
+            then("the half answer is kept as an assistant turn so the next instruction can steer") {
+                state.persistStoppedPartial(state.session, "this is only half") shouldBe true
+                val last = state.session.messages.last()
+                last.role shouldBe "assistant"
+                last.content shouldBe "this is only half"
+            }
         }
     }
 })

@@ -72,6 +72,46 @@ object SafeCommands {
     )
 
     /**
+     * Programs that can never earn family trust, because a single one of their invocations can run
+     * arbitrary code, destroy data, or escape the machine: shells and interpreters take a script as an
+     * argument, and the rest delete, rewrite permissions, raise privilege, or fetch and run remote code.
+     * Family trust is granted by [trustedKey]; a name here makes [trustedKey] return null, so even if a
+     * bad string is typed into the trusted list it can never match a real run, and Always falls back to
+     * the verbatim pin. This is the fence that keeps a broad Always from becoming an unattended shell.
+     */
+    private val BLOCKLIST = setOf(
+        // shells and interpreters: one argument is arbitrary code
+        "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh",
+        "python", "python2", "python3", "pypy", "node", "deno", "bun", "ts-node",
+        "ruby", "perl", "php", "lua", "tclsh", "expect", "osascript", "awk", "gawk", "sed",
+        // direct destruction or permission change
+        "rm", "rmdir", "mv", "cp", "dd", "mkfs", "shred", "truncate", "chmod", "chown", "chgrp",
+        // privilege, process and system control
+        "sudo", "su", "doas", "kill", "killall", "pkill", "reboot", "shutdown", "halt", "poweroff",
+        "mount", "umount", "launchctl", "systemctl", "service",
+        // network: fetch-and-run and remote control
+        "curl", "wget", "nc", "ncat", "socat", "ssh", "scp", "sftp", "rsync"
+    )
+
+    /**
+     * git subcommands that can throw away work or rewrite history, so they are never family-trusted:
+     * one click on an unrelated git command must not let a later clean, reset or checkout discard the
+     * working tree unattended. Every other subcommand, including the write subcommands a developer
+     * repeats by intent (add, commit, push, branch), may be family-trusted once the user asks for it.
+     */
+    private val GIT_UNSAFE_TRUST_SUBCOMMANDS = setOf(
+        "clean", "reset", "checkout", "restore", "switch", "rebase", "filter-branch"
+    )
+
+    /**
+     * Relative build wrappers that may earn family trust by name. A project’s own ./mvnw and ./gradlew
+     * launcher is the usual way its developer rebuilds, so a single Always on one should cover the next
+     * build variant just as a bare mvn or gradle already does -- but only these two names, so a planted
+     * or renamed executable cannot borrow a wrapper’s identity.
+     */
+    private val BUILD_WRAPPERS = setOf("mvnw", "gradlew")
+
+    /**
      * True only for a single simple command whose program is a bare known read-only name, carries no
      * shell syntax, none of that program's write or exec flags, and no positional output. A program
      * given as a path is refused outright: only the bare name is trusted, so a planted binary cannot
@@ -90,6 +130,58 @@ object SafeCommands {
         if (args.any { carriesWriteOrExecFlag(program, it) }) return false
         if (writesToPositionalOutput(program, args)) return false
         return true
+    }
+
+    /**
+     * The family key a single Always may grant trust to, or null when the command is shaped so that
+     * family trust would be unsafe. Spaces and tabs are folded so the key stored at approval time and
+     * the key checked at run time agree even if the command is spelled with different spacing, while a
+     * newline is left as it is and refused: run through a shell it separates two commands, so a key must
+     * never fold a second command into one harmless-looking line. The key
+     * is the bare program, or git plus its subcommand, so one decision covers the repeated build or
+     * commit that only differs in its message or flags -- which is exactly the nag a developer feels.
+     *
+     * A key is withheld for a shell metacharacter (a chain or redirect is never family-trusted), a
+     * newline, a program [isFamilyTrustedProgram] will not vouch for, a name on [BLOCKLIST], a git
+     * subcommand on [GIT_UNSAFE_TRUST_SUBCOMMANDS], or any
+     * invocation that carries one of its write, exec or escape flags. That last rule is why trusting
+     * sort, find or uniq cannot auto-write, and why trusting git cannot smuggle --output or -c: they
+     * lose their key exactly when they stop being a read. The check mirrors [isSafe] but is not gated by
+     * [READ_ONLY], because here the human, not the gate, is the one vouching for the program.
+     */
+    fun trustedKey(command: String): String? {
+        val canonical = command.trim().replace(Regex("[ \\t]+"), " ")
+        if (canonical.isEmpty()) return null
+        if (canonical.any { it in UNSAFE_CHARS }) return null
+        val tokens = canonical.split(Regex("\\s+"))
+        val program = tokens.first()
+        if (!isFamilyTrustedProgram(program)) return null
+        if (program in BLOCKLIST) return null
+        if (program == "git") {
+            val subcommand = tokens.getOrNull(1) ?: return null
+            if (subcommand in GIT_UNSAFE_TRUST_SUBCOMMANDS) return null
+            val escapes = tokens.any { flag ->
+                val bare = stripQuotes(flag)
+                GIT_ESCAPE_FLAGS.any { bare.startsWith(it) }
+            }
+            return if (escapes) null else "git $subcommand"
+        }
+        val args = tokens.drop(1)
+        if (args.any { carriesWriteOrExecFlag(program, it) }) return null
+        if (writesToPositionalOutput(program, args)) return null
+        return program
+    }
+
+    /**
+     * Whether a program given to [trustedKey] may earn family trust, by name only. A bare name is judged
+     * by the blocklist below. A relative single-segment wrapper is admitted only when its base name is a
+     * known [BUILD_WRAPPERS] launcher; a directory path, a parent-directory hop, an absolute path or any
+     * other wrapper is refused, so a planted or renamed binary cannot borrow a trusted wrapper’s identity.
+     */
+    private fun isFamilyTrustedProgram(program: String): Boolean {
+        if (!program.contains('/')) return true
+        if (!program.startsWith("./")) return false
+        return program.removePrefix("./") in BUILD_WRAPPERS
     }
 
     /** True when [tokens] is a git call that only inspects: a known read-only subcommand, no escaping flag. */

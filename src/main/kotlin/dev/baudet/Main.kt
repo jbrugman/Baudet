@@ -9,6 +9,7 @@ import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
 import dev.baudet.ui.AppIcon
 import dev.baudet.ui.AboutDialog
+import dev.baudet.ui.HelpDialog
 import dev.baudet.ui.ChatPanel
 import dev.baudet.ui.FileTreePanel
 import dev.baudet.ui.ProjectSidebar
@@ -192,7 +193,7 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
     root.add(split, BorderLayout.CENTER)
 
     frame.contentPane = root
-    frame.jMenuBar = helpMenu(frame)
+    frame.jMenuBar = helpMenu(frame, tabs)
     chat.refresh()
     settings.reload()
     frame.contentPane.revalidate()
@@ -356,15 +357,20 @@ private fun sidebarToggle(
 }
 
 /**
- * A single Help menu carrying the About action. There are no other menus yet, and rebuilding it
- * with the panels means the menu title and its item localize together on a language switch.
+ * A single Help menu carrying the per-tab help and the About action. The help item reads the
+ * tabbed pane's selected index when clicked, so it opens guidance for whichever tab is in view;
+ * rebuilding the menu with the panels makes the title and both items localize together on a
+ * language switch.
  */
-private fun helpMenu(owner: JFrame): JMenuBar {
+private fun helpMenu(owner: JFrame, tabs: JTabbedPane): JMenuBar {
+    val guide = JMenuItem(Texts[Key.HelpGuide]).apply {
+        addActionListener { HelpDialog.open(owner, HelpDialog.bodyKeyFor(tabs.selectedIndex)) }
+    }
     val about = JMenuItem(Texts[Key.AboutTitle]).apply {
         addActionListener { AboutDialog.open(owner) }
     }
-    val help = JMenu(Texts[Key.MenuHelp]).apply { add(about) }
-    return JMenuBar().apply { add(help) }
+    val menu = JMenu(Texts[Key.MenuHelp]).apply { add(guide); add(about) }
+    return JMenuBar().apply { add(menu) }
 }
 
 /**
