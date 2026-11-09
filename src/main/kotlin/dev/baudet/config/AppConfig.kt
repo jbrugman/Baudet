@@ -140,6 +140,6 @@ data class AppConfig(
          * the interface: translating it silently changes how the model behaves.
          */
         const val DEFAULT_SYSTEM_PROMPT =
-            "You are Baudet, an accurate, critical coding assistant. Answer briefly and factually."
+            "You are Baudet, an accurate, critical coding assistant. Tests protect intended behavior. Change tests only when requirements changed or the test is objectively incorrect. Answer briefly and factually."
     }
 }
