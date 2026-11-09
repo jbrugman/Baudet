@@ -62,13 +62,14 @@ class ExecuteTool : Tool {
 
         val timeout = args.intOrNull("timeout_seconds")?.coerceIn(1, MAX_TIMEOUT_SECONDS)
             ?: DEFAULT_TIMEOUT_SECONDS
-        // Two ways a command skips the prompt. CommandSignature.pinned(command) is exactly what an
-        // earlier Always stored, so a match means the user already granted this: a simple command is
-        // covered by its signature, a chain only by its verbatim text, so a short pin can never
-        // auto-run a chain hiding behind it. The opt-in safe-command gate admits a known read-only
-        // command. Everything else is still confirmed by a person, because a subprocess cannot be
-        // fenced by the folder boundary the way a file write can. The list is asked for here rather
-        // than at the start of the turn, so a pin granted a moment ago in this turn counts at once.
+        // Two ways a command skips the prompt, both routed through the single read-only recognizer in
+        // SafeCommands. CommandSignature.pinned(command) is exactly what an earlier Always stored, so a
+        // match means the user already granted this: only a provably read-only command has a reusable
+        // signature, and everything else -- a chain, or a tool that can write -- is trusted only as its
+        // own verbatim text, so a read approval can never pull a write through it. The opt-in safe gate
+        // admits a command SafeCommands proves read-only. Anything else is confirmed by a person, since
+        // a subprocess cannot be fenced by the folder boundary the way a file write can. The list is
+        // asked for here rather than at the start of the turn, so a pin granted a moment ago counts now.
         val preApproved = CommandSignature.pinned(command) in ctx.autoAllow() ||
             (ctx.autoApproveSafe && SafeCommands.isSafe(command))
         if (!preApproved && !ctx.approveCommand(command, cwd.toString(), timeout))

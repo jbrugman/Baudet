@@ -1,47 +1,49 @@
 package dev.mule.tool
 
 /**
- * Decides what a single Always decision pins, and what it therefore keeps silent about. Pinning the
- * whole command string forced the user to approve every little variation again, which made the
- * always-allow list useless in practice; pinning only the program word would trust more than the
- * user meant to grant. This splits the difference on the shape of the command.
+ * Decides what a single Always decision pins, and what it therefore keeps silent about.
  *
- * A simple command, one with no shell chaining, redirection, grouping or substitution, pins to its
- * signature: the program, its subcommand when the program is git, and its first flag otherwise. One
- * Always then covers the same command run with different arguments, and a flag that writes signs to
- * a different signature than a flag that only reads. A compound command pins to its whole trimmed
- * text instead, so the exact chain the user approved is trusted verbatim while a short signature pin
- * can never auto-run a chain that hides behind it.
+ * The read-only promise lives entirely in [SafeCommands]; this object grants no trust of its own. A
+ * reusable family signature is given only to a command that promise already holds, so a stored pin can
+ * never be broader than an operation the gate would itself run without a human. Every other command -- a
+ * chain, a redirect, or a program the gate cannot prove read-only -- pins to its whole trimmed text, so
+ * the trust granted is exactly the command the user approved.
+ *
+ * That is what closes the gap where approving one read of a tool used to cover a write by the same tool:
+ * a program such as sed keeps its write power in its positional script, so it is never provably read-only,
+ * and both its read and its write now sign to their own verbatim text. One decision no longer reaches the
+ * other. The cost is deliberate: a payload tool must be re-approved for each variation.
  */
 object CommandSignature {
 
-    /** Shell syntax that chains, redirects, groups or substitutes. */
-    private val COMPOUND_SYNTAX = charArrayOf(';', '&', '|', '<', '>', '$', '`', '(', ')', '{', '}', '\n', '\r')
-
-    /** True when [command] carries none of that compound syntax and is therefore a single command. */
-    fun isSimple(command: String): Boolean = command.none { it in COMPOUND_SYNTAX }
-
     /**
-     * The signature of [command]: its program basename, plus its subcommand when the program is git,
-     * plus its first flag otherwise. A bare command with no arguments signs to just the program.
-     * Whitespace is the only separator, so quoting never changes the signature.
+     * The value to store for [command] in the always-allow list and to compare against when deciding
+     * whether the same command still needs a prompt: a family signature when [SafeCommands] proves it
+     * read-only, its whole trimmed text otherwise. Store and check must use this one function so the two
+     * sides never drift.
      */
-    fun of(command: String): String {
-        val tokens = command.trim().split(Regex("\\s+"))
-        val program = tokens.first().substringAfterLast('/')
-        val next = tokens.getOrNull(1)
-        return when {
-            program.isEmpty() -> program
-            program == "git" && next != null -> "$program $next"
-            next != null && next.startsWith("-") -> "$program $next"
-            else -> program
-        }
+    fun pinned(command: String): String {
+        val trimmed = command.trim()
+        return if (SafeCommands.isSafe(trimmed)) signature(trimmed) else trimmed
     }
 
     /**
-     * The value to store for [command] in the always-allow list and to compare against when deciding
-     * whether the same command still needs a prompt: its signature when simple, its whole trimmed
-     * text when compound. Store and check must use this one function so the two sides never drift.
+     * The reusable signature of a command the gate already proved read-only: its program, its subcommand
+     * when the program is git, and its flags sorted, so quoting and argument order never change the sign.
+     * A provably read-only program carries no positional script that can write, so one pin then safely
+     * covers the same read repeated over different files; positional file arguments are dropped for that
+     * reason.
      */
-    fun pinned(command: String): String = if (isSimple(command)) of(command) else command.trim()
+    private fun signature(command: String): String {
+        val tokens = command.split(Regex("\\s+"))
+        val program = tokens.first()
+        return if (program == "git") {
+            val sub = tokens.getOrNull(1)
+            val flags = tokens.drop(2).filter { it.startsWith("-") }.distinct().sorted()
+            (listOfNotNull(program, sub) + flags).joinToString(" ")
+        } else {
+            val flags = tokens.drop(1).filter { it.startsWith("-") }.distinct().sorted()
+            (listOf(program) + flags).joinToString(" ")
+        }
+    }
 }

@@ -46,6 +46,11 @@ object GitCommand {
         args.firstOrNull { it.startsWith("-") && it != "--" }?.let { flag ->
             return "git: the argument '$flag' is not allowed; git global options cannot be passed."
         }
+        // branch is offered to list the branches, which is what bare branch does. Any leftover
+        // argument is a name (dash options were refused above), and git branch <name> would create a
+        // branch -- a write this read-only tool must never perform.
+        if (command == "branch" && args.any { it != "--" })
+            return "git: branch lists only here; it cannot create, rename or delete a branch."
         return null
     }
 

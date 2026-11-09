@@ -347,17 +347,17 @@ class AppStateSpec : BehaviorSpec({
     }
 
     given("pinning a command to always allow") {
-        // The signature of the command is stored, not the whole line, so a later variation of the
-        // same command is covered by the one decision and the pinned set stays small across restarts.
+        // mvn is a payload tool, not a provably read-only command, so it pins to its whole trimmed text
+        // rather than a reusable signature: only the exact command approved is trusted after a restart.
         val state = freshState()
         `when`("a command is allowed always") {
             state.allowCommandAlways("mvn -B test")
-            then("its signature is persisted, so a restart keeps the decision") {
-                (state.store.load()?.autoAllowCommands?.contains("mvn -B")) shouldBe true
+            then("the exact command is persisted, so a restart keeps the decision") {
+                (state.store.load()?.autoAllowCommands?.contains("mvn -B test")) shouldBe true
             }
             then("repeating it does not add a duplicate") {
                 state.allowCommandAlways("mvn -B test")
-                state.store.load()?.autoAllowCommands?.count { it == "mvn -B" } shouldBe 1
+                state.store.load()?.autoAllowCommands?.count { it == "mvn -B test" } shouldBe 1
             }
         }
     }

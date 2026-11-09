@@ -4,18 +4,21 @@ import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 
 /**
- * The safe-command gate lets the user opt out of approving harmless reads, so the cost of a wrong
- * "safe" is a command run without a human. These cases pin the conservative read: a single known
- * read-only command passes, and anything that chains, redirects, substitutes, deletes or names an
- * unknown program falls back to approval. git is judged per subcommand, so looking passes and
- * writing does not, even though both spell the same program.
+ * The safe-command gate lets the user opt out of approving harmless reads, so the cost of a wrong safe
+ * verdict is a command run without a human. These cases pin the conservative read: only a bare known
+ * read-only program, carrying none of its own write or exec flags, passes. A program named by path is
+ * refused so a planted binary cannot borrow a trusted name, and a nominally safe program that is handed
+ * a write or exec flag falls back to approval. Anything that chains, redirects or substitutes also falls
+ * back. git is judged per subcommand, so looking passes and writing does not, even though both spell the
+ * same program.
  */
 class SafeCommandsSpec : BehaviorSpec({
 
     given("single known read-only commands") {
         val safe = listOf(
             "ls", "pwd", "cat notes.txt", "echo hello world", "head -n 5 log.txt",
-            "grep pattern file", "find . -name somefile", "du -sh", "wc -l file", "/bin/ls"
+            "grep pattern file", "find . -name somefile", "du -sh", "wc -l file",
+            "sort -n file", "rg pattern file", "date"
         )
         `when`("classified") {
             then("each is treated as safe") {
@@ -33,6 +36,87 @@ class SafeCommandsSpec : BehaviorSpec({
         `when`("classified") {
             then("none is treated as safe") {
                 unsafe.forEach { SafeCommands.isSafe(it) shouldBe false }
+            }
+        }
+    }
+
+    given("a read-only program named by path") {
+        // The program is matched on its bare name only. Trusting a basename after a slash let a planted
+        // binary in a writable folder be auto-run as if it were the safe command of that name.
+        val unsafe = listOf("/bin/ls", "/usr/bin/ls", "./ls", "/tmp/evil/ls", "/tmp/mule-run-123/grep")
+        `when`("classified") {
+            then("none is safe, because only the bare name is recognised") {
+                unsafe.forEach { SafeCommands.isSafe(it) shouldBe false }
+            }
+        }
+    }
+
+    given("a nominally read-only program handed one of its write or exec flags") {
+        // sort --output writes a file, rg --pre runs a filter program, find -fprint writes a file, and
+        // date --set moves the clock: a name on the read-only list is not safe once such a flag rides it.
+        val unsafe = listOf(
+            "sort -o out.txt in.txt", "sort --output out.txt in.txt", "sort -oout.txt in.txt",
+            "rg --pre /bin/sh file", "rg --pre-glob x --pre prog file",
+            "find . -fprint out.txt", "find . -fprint0 out", "find . -fls out", "find . -fprintf out %p",
+            "date -s 2020-01-01", "date --set 2020-01-01"
+        )
+        `when`("classified") {
+            then("none is safe, because that flag makes it a write or an exec") {
+                unsafe.forEach { SafeCommands.isSafe(it) shouldBe false }
+            }
+        }
+    }
+
+    given("a write hiding behind bundling, quoting or a positional operand") {
+        // The shell parses the command before the program sees it, so a deny flag can be smuggled in
+        // several ways the old naive token check missed: bundled into a short cluster (sort -no sets
+        // -o), wrapped in quotes (find '-delete' still reaches find bare), or skipped entirely when the
+        // program writes through a positional operand rather than a flag (uniq with two files writes the
+        // second). Each is a write, so each must fall back to approval, while an ordinary read of the
+        // same program stays safe -- a long option must never be caught on a letter it shares with a
+        // deny flag, which is why --numeric and -R pass.
+        val unsafe = listOf(
+            "uniq input.txt output.txt", "uniq -c in.txt out.txt",
+            "sort -no output.txt input.txt", "sort -n -o output.txt input.txt",
+            "find . '-delete'", "find . \"-delete\"", "find . '-fprint' out"
+        )
+        val safe = listOf(
+            "uniq input.txt", "uniq -c notes.txt",
+            "sort -rn file", "sort -nu file", "sort --numeric file",
+            "find . -name f", "date -R"
+        )
+        `when`("classified as unsafe") {
+            then("each write is refused despite the bundling, quote or positional trick") {
+                unsafe.forEach { SafeCommands.isSafe(it) shouldBe false }
+            }
+        }
+        `when`("classified as safe") {
+            then("the equivalent read still passes, so the fix does not nag") {
+                safe.forEach { SafeCommands.isSafe(it) shouldBe true }
+            }
+        }
+    }
+
+    given("a write evading the gate through quoting or an end-of-options marker") {
+        // Two more ways the shell hands a nominally read-only command a write that the raw token
+        // check missed: git given its output or ext-diff option wrapped in quotes still reaches git
+        // bare, and uniq past a lone double dash reads a dash-prefixed name as a file, so its second
+        // file becomes an output. Each must fall back to approval, while the plain read of the same
+        // shape -- a bare git log, a single uniq file -- stays safe, since a gate that nagged on every
+        // read is a gate the user turns off.
+        val unsafe = listOf(
+            "git log '--output=/tmp/out.txt'", "git log \"--output=/tmp/out.txt\"",
+            "git show '--ext-diff'", "uniq -- input.txt -output.txt", "uniq -- a.txt b.txt"
+        )
+        val safe = listOf("git log --oneline", "git show 'HEAD'", "uniq -- notes.txt")
+        `when`("a write is smuggled through a quote or a double dash") {
+            then("the gate falls back to approval") {
+                unsafe.forEach { SafeCommands.isSafe(it) shouldBe false }
+            }
+        }
+        `when`("the equivalent plain read is asked about") {
+            then("it stays safe, so the fix does not nag") {
+                safe.forEach { SafeCommands.isSafe(it) shouldBe true }
             }
         }
     }

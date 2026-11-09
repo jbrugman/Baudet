@@ -155,28 +155,35 @@ class ExecuteToolSpec : BehaviorSpec({
                 result.output shouldContain "pinned mid-turn"
             }
         }
-        `when`("a quoted read runs with its signature pinned and the approver set to deny") {
-            // The original nag: a read such as sed with a quoted range re-prompted on every
-            // variation. Its signature now covers any such read, so one Always ends the repetition.
+        `when`("a read by a payload tool runs only when that exact command is pinned") {
+            // sed keeps its write power in the positional script, so it is never provably read-only and
+            // never gets a family signature: only the exact command approved is trusted, and a variation
+            // re-prompts. That is the deliberate tradeoff that keeps one read from authorising a write.
             Files.writeString(root.resolve("notes.txt"), "line one\nline two\n")
             val ctx = ToolContext(
                 root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
-                approveCommand = { _, _, _ -> false }, autoAllow = { setOf("sed -n") }
+                approveCommand = { _, _, _ -> false }, autoAllow = { setOf("sed -n '1,2p' notes.txt") }
             )
-            then("it runs, because a quoted argument does not change the signature") {
+            then("the exact pinned read runs") {
                 val result = tool.execute(commandArgs("sed -n '1,2p' notes.txt"), ctx)
                 result.ok shouldBe true
                 result.output shouldContain "line one"
             }
+            then("a variation of it is declined, because a payload tool signs verbatim") {
+                val result = tool.execute(commandArgs("sed -n '2,3p' notes.txt"), ctx)
+                result.ok shouldBe false
+                result.output shouldContain "declined"
+            }
         }
-        `when`("the write flag of that program runs with only the read signature pinned") {
-            // Pinning sed -n must not quietly trust sed -i, which rewrites a file in place.
+        `when`("a write by a payload tool runs with only an earlier read of it pinned") {
+            // sed is never granted a reusable signature, so a pin left over from reading it cannot cover
+            // sed -i, which rewrites a file in place: the write signs to its own verbatim text.
             Files.writeString(root.resolve("notes.txt"), "keep me\n")
             val ctx = ToolContext(
                 root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
-                approveCommand = { _, _, _ -> false }, autoAllow = { setOf("sed -n") }
+                approveCommand = { _, _, _ -> false }, autoAllow = { setOf("sed -n 1p notes.txt") }
             )
-            then("it is declined, because that flag signs to a different signature") {
+            then("it is declined, because the write is not the command that was pinned") {
                 val result = tool.execute(commandArgs("sed -i 's/keep/write/' notes.txt"), ctx)
                 result.ok shouldBe false
                 result.output shouldContain "declined"

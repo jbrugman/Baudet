@@ -51,6 +51,16 @@ class GitCommandSpec : BehaviorSpec({
         `when`("no verb is given") {
             then("a blank command is refused") { GitCommand.checkAllowed("", emptyList()).shouldNotBeNull() }
         }
+        `when`("branch is asked") {
+            then("a bare branch is allowed, because it only lists") {
+                GitCommand.checkAllowed("branch", emptyList()).shouldBeNull()
+            }
+            then("branch with a name is refused, because that would create a branch") {
+                val reason = GitCommand.checkAllowed("branch", listOf("feature-x"))
+                reason.shouldNotBeNull()
+                reason shouldContain "lists only"
+            }
+        }
     }
 
     given("the argv builder for a cleared call") {
