@@ -353,7 +353,7 @@ class AppState(val store: H2Store) {
     /** The server chain id to reuse for one turn, or null to replay from the client instead. Trimming
      *  always replays, because editing what we send cannot shrink a chain the backend already holds. */
     private fun chainedPrev(s: SessionState): String? =
-        if (config.contextStrategy == ContextStrategy.StopAtLimit && config.useServerSession)
+        if (config.contextStrategy.supportsServerSession && config.useServerSession)
             s.previousResponseId else null
 
     /**
@@ -401,6 +401,7 @@ class AppState(val store: H2Store) {
     }
 
     fun serverSessionActive(): Boolean =
+        config.contextStrategy.supportsServerSession &&
         config.useServerSession && session.previousResponseId != null
 
     /** The project the given conversation belongs to, or null when it is Unassigned. */

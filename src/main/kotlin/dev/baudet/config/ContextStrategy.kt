@@ -20,4 +20,28 @@ package dev.baudet.config
  *
  * Declaration order also drives the Settings combo index, so keep them in this order.
  */
-enum class ContextStrategy { RecentMessages, RollingWindow, StopAtLimit }
+enum class ContextStrategy {
+    RecentMessages,
+    RollingWindow,
+    StopAtLimit;
+
+    /**
+     * Whether the server-side session can carry context under this strategy.
+     *
+     * Only [StopAtLimit] lets a server chain lead, because trimming edits what we send and so
+     * cannot shrink a chain the backend already holds; the trimming strategies always replay from
+     * the client and the send-response-id toggle is inert beneath them. Settings greys that toggle
+     * out accordingly, and the live-session status reads the same rule so it cannot overstate a
+     * chain that is never used.
+     */
+    val supportsServerSession: Boolean get() = this == StopAtLimit
+
+    /**
+     * Whether the window is bounded by a recent-turn count rather than by the model budget.
+     *
+     * Only [RecentMessages] sends a fixed count of recent turns, so only there does the
+     * recent-turns field mean anything; under [RollingWindow] and [StopAtLimit] Settings greys it
+     * out because nothing reads that count.
+     */
+    val trimsByTurnCount: Boolean get() = this == RecentMessages
+}

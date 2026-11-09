@@ -75,6 +75,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         useServerSession.toolTipText = Texts[Key.TipSendResponseId]
         autoApproveSafe.toolTipText = Texts[Key.TipAutoApproveSafe]
         maxIterations.toolTipText = Texts[Key.TipMaxIterations]
+        contextStrategy.addActionListener { updateEnabled() }
+        toolMode.addActionListener { updateEnabled() }
         val form = formPanel(
             listOf(
                 Texts[Key.LanguageLabel] to language,
@@ -124,6 +126,22 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     @Suppress("DEPRECATION")
+    /**
+     * Grey out the controls the current selection makes inert, so the form cannot invite a setting
+     * that nothing reads. The recent-turns field only bites under keep-last; the send-response-id
+     * toggle only bites under Stop at limit, because the trimming strategies always replay from the
+     * client; the per-command limits only bite once tools can run at all. A disabled field falls
+     * back to its stored value on save, so a greyed box never blocks saving the rest of the form.
+     */
+    private fun updateEnabled() {
+        val strategy = ContextStrategy.entries[contextStrategy.selectedIndex]
+        keepRecent.isEnabled = strategy.trimsByTurnCount
+        useServerSession.isEnabled = strategy.supportsServerSession
+        val toolsOn = toolMode.selectedIndex != ToolMode.Off.ordinal
+        maxIterations.isEnabled = toolsOn
+        autoApproveSafe.isEnabled = toolsOn
+    }
+
     fun reload() {
         val c = state.config
         baseUrl.text = c.baseUrl
@@ -150,6 +168,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxIterations.text = c.maxToolIterations.toString()
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
+        updateEnabled()
     }
 
     private fun fail(m: String) {
@@ -165,9 +184,14 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         if (mt == null || mt < 0) { fail(Texts[Key.ErrMaxTokens]); return null }
         val cb = contextBudget.text.trim().toIntOrNull()
         if (cb == null || cb < 0) { fail(Texts[Key.ErrContextBudget]); return null }
+        val strategy = ContextStrategy.entries[contextStrategy.selectedIndex]
         // One turn is the floor: keep-last-N must always be able to send the current turn.
-        val kr = keepRecent.text.trim().toIntOrNull()
-        if (kr == null || kr < 1) { fail(Texts[Key.ErrKeepRecent]); return null }
+        // The field is greyed unless keep-last is chosen, so under another strategy the stored
+        // count stands and an inert box cannot block saving.
+        val kr = if (strategy.trimsByTurnCount) {
+            keepRecent.text.trim().toIntOrNull()?.takeIf { it >= 1 }
+                ?: run { fail(Texts[Key.ErrKeepRecent]); return null }
+        } else state.config.contextKeepRecentMessages
         val temp = temperature.text.trim().toDoubleOrNull()
         if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.ErrTemperature]); return null }
         val tp = topP.text.trim()
@@ -179,8 +203,12 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             fail(Texts[Key.ErrBaseUrl]); return null
         }
-        val mi = maxIterations.text.trim().toIntOrNull()
-        if (mi == null || mi <= 0) { fail(Texts[Key.ErrMaxIterations]); return null }
+        val tools = ToolMode.entries[toolMode.selectedIndex]
+        // The box is greyed while tools are off, so under Off the stored limit stands.
+        val mi = if (tools != ToolMode.Off) {
+            maxIterations.text.trim().toIntOrNull()?.takeIf { it > 0 }
+                ?: run { fail(Texts[Key.ErrMaxIterations]); return null }
+        } else state.config.maxToolIterations
         return state.config.copy(
             language = languageCodes[language.selectedIndex],
             baseUrl = url,
@@ -189,7 +217,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             model = model.text.trim(),
             maxOutputTokens = mt,
             contextBudgetTokens = cb,
-            contextStrategy = ContextStrategy.entries[contextStrategy.selectedIndex],
+            contextStrategy = strategy,
             contextKeepRecentMessages = kr,
             temperature = temp,
             topP = tpVal,
@@ -198,7 +226,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             storeResponses = storeResp.isSelected,
             useServerSession = useServerSession.isSelected,
             autoApproveSafeCommands = autoApproveSafe.isSelected,
-            toolMode = ToolMode.entries[toolMode.selectedIndex],
+            toolMode = tools,
             maxToolIterations = mi,
             systemPrompt = systemPrompt.text
         )
