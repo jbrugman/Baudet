@@ -1,5 +1,6 @@
 package dev.mule.app
 
+import dev.mule.config.ContextStrategy
 import dev.mule.config.ToolMode
 import dev.mule.i18n.Language
 import dev.mule.i18n.Texts
@@ -171,15 +172,16 @@ class AppStateSpec : BehaviorSpec({
      */
     given("a conversation over the configured context budget") {
         val state = freshState()
-        state.saveConfig(state.config.copy(contextBudgetTokens = 100))
+        state.saveConfig(state.config.copy(
+            contextBudgetTokens = 100, contextStrategy = ContextStrategy.StopAtLimit
+        ))
         state.session.messages.add(Msg("user", "a".repeat(4_000)))
         `when`("asking whether this may be sent") {
             val reason = state.contextGuard()
-            then("it is refused, naming both the estimate and the budget") {
+            then("it is refused, and the refusal stays calm about raw token counts") {
                 (reason != null) shouldBe true
-                // The refusal must name the very number the status line shows, not another.
-                (reason!!.contains(state.session.estimateTokens().toString())) shouldBe true
-                (reason!!.contains("100")) shouldBe true
+                // The numbers belong in the status line, not in an error the user reads.
+                (reason!!.contains("100")) shouldBe false
             }
         }
     }
@@ -193,7 +195,31 @@ class AppStateSpec : BehaviorSpec({
         }
     }
 
-    given("a budget of zero, meaning the guard is off") {
+    /*
+     * The automatic strategies are the whole point of the new default: a conversation that
+     * outgrows the model is never refused here, because send bounds the window it sends instead.
+     * Only StopAtLimit refuses, so a refusal must not appear under the other two.
+     */
+    given("a large conversation under an automatic strategy") {
+        `when`("the strategy trims the middle") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(
+                contextBudgetTokens = 100, contextStrategy = ContextStrategy.TruncateAtMiddle
+            ))
+            state.session.messages.add(Msg("user", "a".repeat(400_000)))
+            then("the guard never bothers") { state.contextGuard() shouldBe null }
+        }
+        `when`("the strategy keeps a rolling window") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(
+                contextBudgetTokens = 100, contextStrategy = ContextStrategy.RollingWindow
+            ))
+            state.session.messages.add(Msg("user", "a".repeat(400_000)))
+            then("the guard is silent here too") { state.contextGuard() shouldBe null }
+        }
+    }
+
+    given("a budget of zero against a model whose window is unknown") {
         val state = freshState()
         state.saveConfig(state.config.copy(contextBudgetTokens = 0))
         state.session.messages.add(Msg("user", "a".repeat(400_000)))
@@ -205,46 +231,137 @@ class AppStateSpec : BehaviorSpec({
     }
 
     /*
-     * Auto-compaction is a model call, so it must not fire on a conversation that already fits
-     * or when the budget is off; only a genuine over-budget turn should fold. These pin the two
-     * safe early-return paths so an inverted guard cannot silently spend a request on every send.
+     * The budget is a number typed into Settings, so it can sit above the window the model really
+     * has -- which is exactly how a 128k backend ends up handed a 129k prompt. Where the window is
+     * known the cap is not a preference: it applies whatever the field says, and it stands in for the
+     * field when the field is 0. Where the window is unknown nothing is invented, and the field rules.
      */
-    given("pinning a command to always allow") {
-        val state = freshState()
-        `when`("a command is allowed always") {
-            state.allowCommandAlways("mvn -B test")
-            then("it is persisted, so a restart keeps the decision") {
-                (state.store.load()?.autoAllowCommands?.contains("mvn -B test")) shouldBe true
+    given("a budget typed above the window the model really has") {
+        `when`("asking whether an oversized conversation may be sent") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(
+                model = "gpt-4o", contextBudgetTokens = 400_000,
+                contextStrategy = ContextStrategy.StopAtLimit
+            ))
+            state.session.messages.add(Msg("user", "a".repeat(400_000)))
+            val reason = state.contextGuard()
+            then("the real window refuses it, so the typed number is not the last word") {
+                (reason != null) shouldBe true
+                (reason!!.contains("400000")) shouldBe false
             }
-            then("repeating it does not add a duplicate") {
-                state.allowCommandAlways("mvn -B test")
-                state.store.load()?.autoAllowCommands?.count { it == "mvn -B test" } shouldBe 1
+            then("the refusal stays calm: it names no raw window token count either") {
+                (reason!!.contains("123904")) shouldBe false
+            }
+        }
+        `when`("the status line is read on the same conversation") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(model = "gpt-4o", contextBudgetTokens = 400_000))
+            state.session.messages.add(Msg("user", "a".repeat(400_000)))
+            then("the bar shows where folding starts, not the number in Settings") {
+                // The bar deliberately marks the early ceiling -- three quarters of the window,
+                // where the user can still act -- rather than the point of refusal, which is what
+                // the guard names. Either way the typed 400000 must not appear: it is not a window.
+                (state.contextWarning().contains("96000")) shouldBe true
+                (state.contextWarning().contains("400000")) shouldBe false
+            }
+        }
+        `when`("the conversation still fits inside the window") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(model = "gpt-4o", contextBudgetTokens = 400_000))
+            state.session.messages.add(Msg("user", "short question"))
+            then("a cap that low would be a bug, so nothing is held back") {
+                state.contextGuard() shouldBe null
             }
         }
     }
 
-    given("auto-compaction for the next turn") {
-        `when`("the budget is switched off") {
+    given("a budget of zero against a model whose window is known") {
+        `when`("asking whether an oversized conversation may be sent") {
             val state = freshState()
-            state.saveConfig(state.config.copy(contextBudgetTokens = 0))
+            state.saveConfig(state.config.copy(
+                model = "gpt-4o", contextBudgetTokens = 0,
+                contextStrategy = ContextStrategy.StopAtLimit
+            ))
             state.session.messages.add(Msg("user", "a".repeat(400_000)))
-            val before = state.session.messages.size
-            state.autoCompactIfNeeded()
-            then("nothing runs, so no turn is folded away") {
-                state.session.messages.size shouldBe before
-            }
-        }
-        `when`("the conversation fits inside the budget") {
-            val state = freshState()
-            state.saveConfig(state.config.copy(contextBudgetTokens = 100_000))
-            state.session.messages.add(Msg("user", "short question"))
-            val before = state.session.messages.size
-            state.autoCompactIfNeeded()
-            then("the guard sees room to spare, so nothing is folded away") {
-                state.session.messages.size shouldBe before
+            then("the window still refuses under the stop strategy, even with the budget off") {
+                (state.contextGuard() != null) shouldBe true
             }
         }
     }
+
+    given("a budget below the window") {
+        `when`("asking whether a conversation over that budget may be sent") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(
+                model = "gpt-4o", contextBudgetTokens = 100,
+                contextStrategy = ContextStrategy.StopAtLimit
+            ))
+            state.session.messages.add(Msg("user", "a".repeat(4_000)))
+            then("the user's own smaller budget still wins, so keeping a chat cheap holds") {
+                (state.contextGuard() != null) shouldBe true
+            }
+        }
+    }
+
+    /*
+     * The window learned from a refusal is the only trustworthy number for a model this table has
+     * never heard of. It is stored under the server and model it was learned on, because a number
+     * carried over to a different one is worse than knowing nothing: it would cap a 128k model to the
+     * window of a 32k one, or the other way round.
+     */
+    given("a refusal that named the window") {
+        `when`("it is recorded") {
+            val state = freshState()
+            state.learnContextWindow(65_536)
+            then("it is persisted, so the next start guards against it too") {
+                (state.store.load()?.learnedContextWindow) shouldBe 65_536
+            }
+            then("it caps a budget the model never had") {
+                state.saveConfig(state.config.copy(
+                    contextBudgetTokens = 400_000, contextStrategy = ContextStrategy.StopAtLimit
+                ))
+                state.session.messages.add(Msg("user", "a".repeat(200_000)))
+                (state.contextGuard() != null) shouldBe true
+            }
+            then("it beats the table for a model the table does know") {
+                state.saveConfig(state.config.copy(model = "gpt-4o"))
+                // The key no longer matches, so the learned number is gone and the table answers.
+                state.contextWindowTokens() shouldBe 128_000
+            }
+        }
+        `when`("the model it was learned on is switched away from") {
+            val state = freshState()
+            state.learnContextWindow(65_536)
+            state.saveConfig(state.config.copy(model = "something-else"))
+            then("the stale number is dropped instead of inherited") {
+                state.contextWindowTokens() shouldBe null
+            }
+        }
+        `when`("the refusal named no number") {
+            val state = freshState()
+            state.learnContextWindow(null)
+            then("nothing is stored, so unknown stays unknown") {
+                state.config.learnedContextWindow shouldBe 0
+            }
+        }
+    }
+
+    given("pinning a command to always allow") {
+        // The signature of the command is stored, not the whole line, so a later variation of the
+        // same command is covered by the one decision and the pinned set stays small across restarts.
+        val state = freshState()
+        `when`("a command is allowed always") {
+            state.allowCommandAlways("mvn -B test")
+            then("its signature is persisted, so a restart keeps the decision") {
+                (state.store.load()?.autoAllowCommands?.contains("mvn -B")) shouldBe true
+            }
+            then("repeating it does not add a duplicate") {
+                state.allowCommandAlways("mvn -B test")
+                state.store.load()?.autoAllowCommands?.count { it == "mvn -B" } shouldBe 1
+            }
+        }
+    }
+
 
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {

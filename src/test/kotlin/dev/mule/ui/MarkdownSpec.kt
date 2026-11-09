@@ -27,6 +27,16 @@ class MarkdownSpec : BehaviorSpec({
                     listOf(SpanKind.Plain to "2 * 3 = 6")
             }
         }
+        `when`("arithmetic holds a pair of asterisks") {
+            then("the multiplication stays literal, because a spaced marker is not emphasis") {
+                kinds(Markdown.inline("2 * 3 * 4")) shouldContainExactly
+                    listOf(SpanKind.Plain to "2 * 3 * 4")
+            }
+            then("a formula reads the same way") {
+                kinds(Markdown.inline("a * b * c = 6")) shouldContainExactly
+                    listOf(SpanKind.Plain to "a * b * c = 6")
+            }
+        }
         `when`("an identifier is written with underscores") {
             then("the name survives verbatim, which is why underscores are never emphasis") {
                 kinds(Markdown.inline("set max_output_tokens to zero")) shouldContainExactly
@@ -50,6 +60,27 @@ class MarkdownSpec : BehaviorSpec({
         }
     }
 
+    given("markers that pad themselves with spaces") {
+        `when`("an italic pair is opened and closed on a space") {
+            then("it stays literal, because emphasis hugs the words it styles") {
+                kinds(Markdown.inline("a * b * c")) shouldContainExactly
+                    listOf(SpanKind.Plain to "a * b * c")
+            }
+        }
+        `when`("a bold pair is padded the same way") {
+            then("it is not styled either") {
+                kinds(Markdown.inline("a ** b ** c")) shouldContainExactly
+                    listOf(SpanKind.Plain to "a ** b ** c")
+            }
+        }
+        `when`("only one side is padded") {
+            then("the pair is still refused, since both sides have to hold") {
+                kinds(Markdown.inline("*draft *note")) shouldContainExactly
+                    listOf(SpanKind.Plain to "*draft *note")
+            }
+        }
+    }
+
     given("markers that do close") {
         `when`("bold, italic and inline code share a sentence") {
             then("each run carries the kind it asked for") {
@@ -60,6 +91,22 @@ class MarkdownSpec : BehaviorSpec({
                     SpanKind.Italic to "d",
                     SpanKind.Plain to " e ",
                     SpanKind.Code to "f"
+                )
+            }
+        }
+        `when`("a closed pair is followed by a stray asterisk") {
+            then("the emphasis is taken and the extra marker is kept") {
+                kinds(Markdown.inline("*foo**")) shouldContainExactly listOf(
+                    SpanKind.Italic to "foo",
+                    SpanKind.Plain to "*"
+                )
+            }
+        }
+        `when`("a multiplication sits next to real emphasis") {
+            then("only the emphasis is styled") {
+                kinds(Markdown.inline("width * 2 and *note*")) shouldContainExactly listOf(
+                    SpanKind.Plain to "width * 2 and ",
+                    SpanKind.Italic to "note"
                 )
             }
         }

@@ -3,6 +3,7 @@ package dev.mule.ui
 import dev.mule.api.CapabilityProbe
 import dev.mule.app.AppState
 import dev.mule.config.AppConfig
+import dev.mule.config.ContextStrategy
 import dev.mule.config.ToolMode
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
@@ -27,6 +28,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val model = JTextField(24)
     private val maxTokens = JTextField(8)
     private val contextBudget = JTextField(10)
+    private val contextStrategy = JComboBox(
+        arrayOf(Texts[Key.StrategyTruncate], Texts[Key.StrategyRolling], Texts[Key.StrategyStop])
+    )
     private val temperature = JTextField(8)
     private val topP = JTextField(8)
     private val reasoning = JComboBox(arrayOf("", "minimal", "low", "medium", "high"))
@@ -59,6 +63,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         model.toolTipText = Texts[Key.TipModel]
         maxTokens.toolTipText = Texts[Key.TipMaxTokens]
         contextBudget.toolTipText = Texts[Key.TipContextBudget]
+        contextStrategy.toolTipText = Texts[Key.TipContextStrategy]
         temperature.toolTipText = Texts[Key.TipTemperature]
         topP.toolTipText = Texts[Key.TipTopP]
         reasoning.toolTipText = Texts[Key.TipReasoning]
@@ -77,6 +82,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 Texts[Key.ModelLabel] to model,
                 Texts[Key.MaxTokensLabel] to maxTokens,
                 Texts[Key.ContextBudgetLabel] to contextBudget,
+                Texts[Key.ContextStrategyLabel] to contextStrategy,
                 Texts[Key.TemperatureLabel] to temperature,
                 Texts[Key.TopPLabel] to topP,
                 Texts[Key.ReasoningEffortLabel] to reasoning,
@@ -121,6 +127,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         model.text = c.model
         maxTokens.text = c.maxOutputTokens.toString()
         contextBudget.text = c.contextBudgetTokens.toString()
+        contextStrategy.selectedIndex = c.contextStrategy.ordinal
         temperature.text = c.temperature.toString()
         topP.text = c.topP?.toString() ?: ""
         reasoning.selectedItem = (c.reasoningEffort ?: "")
@@ -173,6 +180,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             model = model.text.trim(),
             maxOutputTokens = mt,
             contextBudgetTokens = cb,
+            contextStrategy = ContextStrategy.entries[contextStrategy.selectedIndex],
             temperature = temp,
             topP = tpVal,
             reasoningEffort = reasoning.selectedItem?.toString()?.takeIf { it.isNotBlank() },

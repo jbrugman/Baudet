@@ -109,4 +109,33 @@ class CompactionPlanSpec : BehaviorSpec({
             }
         }
     }
+
+    /**
+     * The shape of a session that actually gets stranded: one enormous tool observation as the
+     * oldest turn, in a conversation already past the backend's window. foldBatch has to take it --
+     * a fold that refuses to take a turn can never finish -- so the ceiling in [source] is the only
+     * thing between that turn and a request the backend rejects. It once received 0 there, which
+     * [source] read as "no ceiling", and pressing Compact failed with the very error it was meant
+     * to clear. This pins the turn arriving cut rather than whole.
+     */
+    given("a stranded session whose oldest turn is a 400k character tool observation") {
+        val huge = Msg("tool", "O".repeat(400_000))
+        `when`("picking the batch under the ceiling one call may carry") {
+            val (batch, rest) = CompactionPlan.foldBatch(listOf(huge), summaryChars = 0, maxChars = 48_000)
+            then("the fold takes it, so the fold cannot stall on an oversized turn") {
+                batch.size shouldBe 1
+                rest shouldBe emptyList()
+            }
+        }
+        `when`("building that batch into the text under the same ceiling") {
+            val source = CompactionPlan.source(null, listOf(huge), 48_000)
+            then("it is cut to the ceiling instead of sent whole") {
+                (source.length < 400_000) shouldBe true
+                (source.length <= 48_000 + 64) shouldBe true
+            }
+            then("which keeps the call far inside a 128k window at three characters a token") {
+                (source.length / 3 < 128_000) shouldBe true
+            }
+        }
+    }
 })

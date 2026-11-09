@@ -392,10 +392,9 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         lastRender = render
         Thread {
             try {
-                // Compaction is a model call, so it runs here rather than on the EDT: a
-                // conversation that would not fit gets folded away before it is refused. Only
-                // when it still will not fit after that do we tell the user, with nothing sent.
-                state.autoCompactIfNeeded()
+                // contextGuard is a cheap local estimate, so it runs here rather than on the
+                // EDT. Under the trimming strategies it stays silent and send bounds the window
+                // itself; only under StopAtLimit does it refuse, here, before a request goes out.
                 state.contextGuard()?.let { reason ->
                     SwingUtilities.invokeLater { overBudget(reason) }
                     return@Thread
@@ -460,6 +459,11 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         lastRender?.flush()
         append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
         if (e is BackendException && e.contextOverflow) {
+            // The refusal names the window this backend really has, which is knowledge the app did
+            // not have before it asked. Recording it is what stops the next attempt repeating the
+            // failure: the guard, the tool ceiling and the automatic fold all read that number from
+            // then on, so the conversation gets folded instead of sent into a second refusal.
+            state.learnContextWindow(e.claimedContextTokens)
             append(Texts[Key.ContextOverflow] + "\n\n", error)
             fail(Texts[Key.ContextOverflow])
         } else {
@@ -525,6 +529,12 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
+                    // A fold refused for length is the one failure here worth learning from: it names
+                    // the window this backend really has, and the fold is usually the first call big
+                    // enough to hit it. Recording it bounds the next attempt, so pressing Compact
+                    // again works instead of repeating the failure that stranded the conversation.
+                    if (e is BackendException && e.contextOverflow)
+                        state.learnContextWindow(e.claimedContextTokens)
                     fail(Texts.fmt(Key.CompactionFailed, e.message ?: "?"))
                     setBusy(false)
                 }

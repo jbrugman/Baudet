@@ -21,10 +21,17 @@ class ToolContext(
         { _, _, _ -> false },
     val readGranted: Boolean = false,
     /**
-     * Exact commands the user chose to always allow: a command equal to one of these skips the
-     * approval prompt. Whole-string match only, so it can never widen to a chained variant.
+     * Command signatures the user chose to always allow: a command whose signature matches one of
+     * these skips the approval prompt. The match is by signature rather than whole string, so one
+     * Always decision covers the same command run with different arguments. ExecuteTool applies
+     * this only to a simple command, so a signature can never auto-run a chained or substituted one.
+     *
+     * A provider rather than the set itself, because a tool loop runs many rounds on one context
+     * while "Always allow" is clicked halfway through one of them. Handed over as a copy, a pin
+     * taken in round two would not exist until the next turn, and the user would be asked about
+     * the very command they just pinned.
      */
-    val autoAllow: Set<String> = emptySet(),
+    val autoAllow: () -> Set<String> = { emptySet() },
     /** When true, a command [SafeCommands] recognises as read-only also skips the approval prompt. */
     val autoApproveSafe: Boolean = false
 )

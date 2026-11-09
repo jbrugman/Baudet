@@ -65,6 +65,9 @@ class AppConfigSpec : BehaviorSpec({
             then("an unset top_p stays unset rather than becoming zero") {
                 back.topP shouldBe null
             }
+            then("the context strategy survives the round-trip") {
+                back.contextStrategy shouldBe ContextStrategy.TruncateAtMiddle
+            }
         }
     }
 
@@ -94,6 +97,10 @@ class AppConfigSpec : BehaviorSpec({
             then("the tool loop defaults to asking, never writing silently") {
                 cfg.toolMode shouldBe ToolMode.Ask
                 cfg.maxToolIterations shouldBe 8
+            }
+            then("context defaults to the automatic trim, with output room left to the server") {
+                cfg.contextStrategy shouldBe ContextStrategy.TruncateAtMiddle
+                cfg.maxOutputTokens shouldBe 0
             }
         }
     }
