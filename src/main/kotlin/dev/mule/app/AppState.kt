@@ -104,6 +104,23 @@ class AppState(val store: H2Store) {
         onConfigSaved(next)
     }
 
+    /**
+     * Persist only the window geometry and the two remembered split widths. Unlike
+     * [saveConfig] this never fires [onConfigSaved], so storing layout when the window
+     * closes cannot trigger a panel rebuild or a feedback loop.
+     */
+    fun updateWindowGeometry(x: Int, y: Int, w: Int, h: Int, left: Int, right: Int) {
+        config = config.copy(
+            windowX = x,
+            windowY = y,
+            windowWidth = w,
+            windowHeight = h,
+            leftDivider = left,
+            rightDivider = right
+        )
+        store.save(config)
+    }
+
     /** Start a new conversation in the currently selected project, if any. */
     fun newSession(): SessionState = newSession(currentProjectId)
 

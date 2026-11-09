@@ -51,7 +51,20 @@ data class AppConfig(
     var maxToolIterations: Int = 8,
 
     /** Blank = the built-in English default (model-facing, never translated); typed text always wins. */
-    var systemPrompt: String = ""
+    var systemPrompt: String = "",
+
+    /**
+     * Last window position and size, remembered so the app reopens where the user left it.
+     * Zero means never stored, which lets the first launch fall back to a default size. This
+     * rides in the same single-row JSON blob as every other setting, so no schema is touched.
+     */
+    var windowX: Int = 0,
+    var windowY: Int = 0,
+    var windowWidth: Int = 0,
+    var windowHeight: Int = 0,
+    /** Remembered split widths so a rebuild, such as a language change, keeps the user layout. */
+    var leftDivider: Int = 0,
+    var rightDivider: Int = 0
 ) {
     /** Key resolution: UI input wins, then the environment. Never hardcoded. */
     fun resolvedApiKey(): String =

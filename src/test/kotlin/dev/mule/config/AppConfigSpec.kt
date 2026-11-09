@@ -97,4 +97,35 @@ class AppConfigSpec : BehaviorSpec({
             }
         }
     }
+
+    given("window geometry") {
+        `when`("a fresh config is made") {
+            then("nothing is stored yet, so the first launch can fall back to a default") {
+                val cfg = AppConfig()
+                cfg.windowX shouldBe 0
+                cfg.windowY shouldBe 0
+                cfg.windowWidth shouldBe 0
+                cfg.windowHeight shouldBe 0
+                cfg.leftDivider shouldBe 0
+                cfg.rightDivider shouldBe 0
+            }
+        }
+        `when`("geometry round-trips through the stored form") {
+            val cfg = AppConfig(
+                windowX = 80, windowY = 60, windowWidth = 1040,
+                windowHeight = 720, leftDivider = 280, rightDivider = 700
+            )
+            val back = json.decodeFromString(
+                AppConfig.serializer(), json.encodeToString(AppConfig.serializer(), cfg)
+            )
+            then("every remembered value survives") {
+                back.windowX shouldBe 80
+                back.windowY shouldBe 60
+                back.windowWidth shouldBe 1040
+                back.windowHeight shouldBe 720
+                back.leftDivider shouldBe 280
+                back.rightDivider shouldBe 700
+            }
+        }
+    }
 })

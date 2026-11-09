@@ -4,6 +4,7 @@ import com.formdev.flatlaf.FlatDarkLaf
 import dev.mule.api.CapabilityProbe
 import dev.mule.api.ModelsClient
 import dev.mule.app.AppState
+import dev.mule.config.AppConfig
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.ui.AppIcon
@@ -13,10 +14,15 @@ import dev.mule.ui.ProjectSidebar
 import dev.mule.ui.ModelsPanel
 import dev.mule.ui.SettingsPanel
 import dev.mule.ui.SidebarToggleIcon
+import dev.mule.ui.WindowLayout
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Font
+import java.awt.GraphicsEnvironment
 import java.awt.Insets
+import java.awt.Rectangle
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.nio.file.Path
 import javax.swing.BorderFactory
 import javax.swing.JButton
@@ -58,20 +64,21 @@ fun main(args: Array<String>) {
     SwingUtilities.invokeLater {
         val frame = JFrame("Mule · local coding-assistant")
         frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
-        frame.size = Dimension(1040, 720)
-        frame.setLocationRelativeTo(null)
+        applySavedBounds(frame, state.config)
         frame.iconImages = AppIcon.images()
 
         var shown = Texts.language
-        show(state, frame)
+        var layout = show(state, frame, null)
 
         // Settings is the only place the language changes, and only through its own
         // button, so this cannot loop: the panels are rebuilt exactly when the
-        // persisted value actually differs from the language on screen.
+        // persisted value actually differs from the language on screen. A rebuild keeps
+        // the split widths the user just had instead of snapping them back to defaults.
         state.onConfigSaved = {
             if (Texts.language != shown) {
                 shown = Texts.language
-                SwingUtilities.invokeLater { show(state, frame) }
+                val previous = layout
+                SwingUtilities.invokeLater { layout = show(state, frame, previous) }
             }
         }
 
@@ -80,12 +87,27 @@ fun main(args: Array<String>) {
         state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
         state.approveCommand = { command, cwd, timeout -> confirmRun(frame, command, cwd, timeout) }
 
+        // Remember the window and both split widths when the window closes. A collapsed
+        // side stays out of the saved geometry, so reopening never restores a hidden panel.
+        frame.addWindowListener(object : WindowAdapter() {
+            override fun windowClosing(e: WindowEvent) {
+                state.updateWindowGeometry(
+                    frame.x, frame.y, frame.width, frame.height,
+                    clampedDivider(layout.left, state.config.leftDivider),
+                    clampedDivider(layout.right, state.config.rightDivider)
+                )
+            }
+        })
+
         frame.isVisible = true
     }
 }
 
+/** The two live split panes, kept so a rebuild can carry their current widths across. */
+private data class MainLayout(val left: JSplitPane, val right: JSplitPane)
+
 /** (Re)build every panel in the active language and put it on screen. */
-private fun show(state: AppState, frame: JFrame) {
+private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLayout {
     val chat = ChatPanel(state)
     val settings = SettingsPanel(state)
     val models = ModelsPanel(state) {
@@ -118,13 +140,13 @@ private fun show(state: AppState, frame: JFrame) {
     // Two splits, three panels: [sidebar | tabs] on the left, those as a whole beside the
     // file tree. Each toolbar toggle owns one divider, so either side panel collapses on its own.
     val left = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
-        dividerLocation = 280
+        dividerLocation = WindowLayout.resolveDivider(previous?.left?.dividerLocation, state.config.leftDivider, 280)
         resizeWeight = 0.2
         isContinuousLayout = true
         isOneTouchExpandable = false   // replaced by the toolbar toggle, which stays put when collapsed
     }
     val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, files).apply {
-        dividerLocation = 720
+        dividerLocation = WindowLayout.resolveDivider(previous?.right?.dividerLocation, state.config.rightDivider, 720)
         resizeWeight = 1.0             // the file tree keeps its width; the chat absorbs resizing
         isContinuousLayout = true
         isOneTouchExpandable = false
@@ -146,6 +168,38 @@ private fun show(state: AppState, frame: JFrame) {
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
+    return MainLayout(left, split)
+}
+
+/**
+ * Size and place the frame from saved geometry, falling back to a centered default when
+ * nothing usable is stored or the remembered spot no longer intersects any screen. No
+ * maximized state is kept: restoring one behaves inconsistently across window managers,
+ * so it is left out on purpose.
+ */
+private fun applySavedBounds(frame: JFrame, config: AppConfig) {
+    val width = config.windowWidth
+    val height = config.windowHeight
+    if (width <= 0 || height <= 0) {
+        frame.size = Dimension(1040, 720)
+        frame.setLocationRelativeTo(null)
+        return
+    }
+    frame.setSize(width, height)
+    val saved = Rectangle(config.windowX, config.windowY, width, height)
+    val visible = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+    if (visible.intersects(saved)) frame.setLocation(config.windowX, config.windowY)
+    else frame.setLocationRelativeTo(null)
+}
+
+/**
+ * The width worth saving for one split: its live divider, unless that divider is collapsed
+ * or unset -- zero, or at or past the far edge -- in which case the previously stored value
+ * is kept so a collapse never becomes the reopened default.
+ */
+private fun clampedDivider(split: JSplitPane, stored: Int): Int {
+    val location = split.dividerLocation
+    return if (location <= 0 || location >= split.width) stored else location
 }
 
 /**
