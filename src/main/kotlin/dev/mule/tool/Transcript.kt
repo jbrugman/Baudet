@@ -38,6 +38,18 @@ object Transcript {
     }
 
     /**
+     * Split for a window the caller has already bounded. Same scrubbing as [forCall] but no length
+     * clamp, because [dev.mule.session.ContextTrimmer] already cut the list to the size the model can
+     * carry for this strategy; re-fitting it here to the fixed replay ceiling would undo that and put
+     * the effective limit back to a guess instead of the window.
+     */
+    fun splitForWindow(history: List<Msg>): Pair<List<Msg>, String> {
+        val userText = scrub(history.lastOrNull()?.content ?: "")
+        val prior = history.dropLast(1).map { it.copy(content = scrub(it.content)) }
+        return prior to userText
+    }
+
+    /**
      * The newest prior turns that fit into one call, oldest first, with a marker standing in for
      * whatever had to go. Without this a tool run grows one observation per round trip and
      * re-sends all of them every iteration, so a long run dies partway through with a context

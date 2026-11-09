@@ -70,7 +70,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     OrEnvVar("or env-var", "of env-var", "ou variable d'env.", "oder Umgebungsvariable"),
     ModelLabel("model", "model", "modèle", "Modell"),
     MaxTokensLabel("max output tokens (0 = server)", "max output tokens (0 = server)", "jetons de sortie max (0 = serveur)", "max. Ausgabetoken (0 = Server)"),
-    ContextBudgetLabel("context budget (tokens, 0 = off)", "context-budget (tokens, 0 = uit)", "budget de contexte (jetons, 0 = désactivé)", "Kontextbudget (Token, 0 = aus)"),
+    ContextBudgetLabel("context budget (tokens, 0 = auto)", "context-budget (tokens, 0 = automatisch)", "budget de contexte (jetons, 0 = auto)", "Kontextbudget (Token, 0 = auto)"),
+    ContextStrategyLabel("when context runs out", "wanneer de context opraakt", "en cas de saturation du contexte", "bei erschöpftem Kontext"),
     TemperatureLabel("temperature", "temperature", "température", "Temperatur"),
     TopPLabel("top_p (blank = do not send)", "top_p (leeg = niet sturen)", "top_p (vide = ne pas envoyer)", "top_p (leer = nicht senden)"),
     ReasoningEffortLabel("reasoning-effort", "reasoning-effort", "effort de raisonnement", "Begründungsaufwand"),
@@ -96,10 +97,10 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Obergrenze für die Token, die das Modell in einer Runde erzeugen darf. Bei 0 oder leer entscheidet das Server und wendet die eigene Grenze des Modells an."
     ),
     TipContextBudget(
-        "A client-side estimate only: it fills the token bar and the compact warning. Nothing of it is sent to the server, and the real context window is never asked for. 0 or blank hides the budget.",
-        "Alleen een schatting aan de kant van de client: hij vult de tokenbalk en de compactwaarschuwing. Er gaat niets davon naar de server en de echte contextgrootte wordt nooit opgevraagd. Bij 0 of leeg valt het budget weg.",
-        "Une estimation côté client uniquement : elle remplit la barre de jetons et l'avertissement de compression. Rien n'en est envoyé au serveur et la vraie fenêtre de contexte n'est jamais demandée. À 0 ou vide, le budget disparaît.",
-        "Nur eine Schätzung auf Client-Seite: sie füllt die Token-Leiste und die Kompaktwarnung. Nichts davon wird an den Server gesendet, und die echte Kontextgröße wird nie abgefragt. Bei 0 oder leer entfällt das Budget."
+        "A client-side estimate only: it fills the token bar and drives the automatic fold. Nothing of it is sent to the server. 0 or blank means the app decides: fold at three quarters of the model's context window and refuse at its edge, taking the window from the refusal a backend named most recently when it named one. A number you type is a ceiling, never a floor.",
+        "Alleen een schatting aan de kant van de client: hij vult de tokenbalk en stuurt de automatische vouwing aan. Er gaat niets ervan naar de server. Bij 0 of leeg kiest het programma zelf: vouwen bij driekwart van de contextgrootte en weigeren aan de rand, met de grootte die een backend het laatst noemde als die er een noemde. Een getal dat je invult is een plafond, nooit een vloer.",
+        "Une estimation côté client uniquement : elle remplit la barre de jetons et déclenche la compression automatique. Rien n'en est envoyé au serveur. À 0 ou vide, l'application décide : compresser aux trois quarts de la fenêtre de contexte et refuser à son bord, en reprenant la fenêtre qu'un serveur a citée le plus récemment s'il en a cité une. Un nombre que vous introduisez est un plafond, jamais un plancher.",
+        "Nur eine Schätzung auf Client-Seite: sie füllt die Token-Leiste und steuert die automatische Komprimierung. Nichts davon wird an den Server gesendet. Bei 0 oder leer entscheidet das Programm: komprimieren bei drei Vierteln der Kontextgröße und ablehnen an ihrer Grenze, wobei die Größe zählt, die ein Server zuletzt nannte, falls er eine nannte. Eine eingetragene Zahl ist eine Obergrenze, nie eine Untergrenze."
     ),
     TipThinkingToggle("Show or hide the reasoning of this turn. It is never stored.", "Toon of verberg de redenering van deze beurt. Die wordt nooit opgeslagen.", "Affiche ou masque le raisonnement de ce tour. Il n'est jamais enregistré.", "Denkvorgang dieser Runde ein- oder ausblenden. Er wird nie gespeichert."),
     TipBaseUrl("The OpenAI-compatible API endpoint, usually ending in /v1. Point it at your local backend, for example 127.0.0.1:8000.", "De OpenAI-compatibele API, meestal eindigend op /v1. Richt deze op uw lokale backend, bijvoorbeeld 127.0.0.1:8000.", "Le point de terminaison de l'API compatible OpenAI, se terminant généralement par /v1. Pointez-le vers votre backend local, par exemple 127.0.0.1:8000.", "Der Endpunkt der OpenAI-kompatiblen API, normalerweise endend auf /v1. Richten Sie ihn auf Ihr lokales Backend, zum Beispiel 127.0.0.1:8000."),
@@ -115,17 +116,41 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     TipSendResponseId("Sends previous_response_id so the backend reuses its own context instead of replaying the whole transcript each turn.", "Stuurt previous_response_id mee zodat de backend zijn eigen context hergebruikt in plaats van elke beurt het hele gesprek opnieuw te sturen.", "Envoie previous_response_id pour que le backend réutilise son propre contexte au lieu de rejouer tout le transcript à chaque tour.", "Sendet previous_response_id, damit das Backend seinen eigenen Kontext wiederverwendet, statt jeden Turn das ganze Protokoll erneut zu senden."),
     TipMaxIterations("How many tool round-trips one answer may take before the loop stops. A guard against a tool that never settles.", "Hoeveel tool-rondes één antwoord mag maken voordat de lus stopt. Een bewaking tegen een tool die nooit uitkomt.", "Le nombre d'allers-retours d'outils qu'une réponse peut faire avant que la boucle s'arrête. Un garde-fou contre un outil qui ne se stabilise jamais.", "Wie viele Werkzeug-Runden eine Antwort machen darf, bevor die Schleife stoppt. Eine Sicherung gegen ein Werkzeug, das nie zur Ruhe kommt."),
     TipAutoApproveSafe("Lets clearly safe read-only commands run without an approval prompt. Writes still ask unless the tool mode is auto.", "Laat duidelijk veilige alleen-lezen commando's draaien zonder een goedkeuringsprompt. Schrijven vraagt nog, tenzij de toolmodus op auto staat.", "Exécute les commandes en lecture seule manifestement sûres sans demande d'approbation. Les écritures demandent encore, sauf si le mode d'outil est auto.", "Lässt eindeutig sichere Nur-Lese-Befehle ohne Freigabeaufforderung laufen. Schreibfragen bleiben, außer der Werkzeugmodus steht auf auto."),
+    StrategyTruncate(
+        "trim the middle, keep start and end",
+        "midden inkorten, begin en eind houden",
+        "couper au milieu, garder début et fin",
+        "Mitte kürzen, Anfang und Ende behalten"
+    ),
+    StrategyRolling(
+        "keep only the latest turns",
+        "alleen de nieuwste beurten houden",
+        "ne garder que les derniers tours",
+        "nur die neuesten Runden behalten"
+    ),
+    StrategyStop(
+        "stop and ask me to compact",
+        "stoppen en mij vragen te compacten",
+        "arrêter et me demander de compacter",
+        "stoppen und zum Kompaktieren auffordern"
+    ),
+    TipContextStrategy(
+        "How a conversation that outgrows the model is handled. Trim the middle keeps how it began plus the newest turns and drops what is between them; keep only the latest turns sends just the newest tail; stop and ask refuses the turn until you compact or start fresh. The stored conversation is never edited, so only the window sent to the model changes.",
+        "Hoe een gesprek wordt behandeld dat groter wordt dan het model aankan. Midden inkorten houdt het begin en de nieuwste beurten en laat het ertussen weg; alleen de nieuwste beurten stuurt alleen de nieuwste staart; stoppen en mij vragen weigert de beurt tot je compact of opnieuw begint. Het opgeslagen gesprek wordt nooit bewerkt, alleen het venster naar het model verandert.",
+        "Comment gérer une conversation plus grande que le modèle. Couper au milieu garde le début et les derniers tours et supprime ce qui les sépare ; ne garder que les derniers tours n'envoie que la dernière partie ; arrêter et me demander refuse le tour tant que vous ne compactez pas ou ne recommencez pas. La conversation enregistrée n'est jamais modifiée, seule la fenêtre envoyée au modèle change.",
+        "Wie eine Unterhaltung behandelt wird, die über das Modell hinauswächst. Mitte kürzen behält den Anfang und die neuesten Runden und lässt das Dazwischen weg; nur die neuesten Runden sendet nur den neuesten Teil; stoppen und fragen lehnt die Runde ab, bis Sie kompaktieren oder neu beginnen. Die gespeicherte Unterhaltung wird nie bearbeitet, nur das Fenster an das Modell ändert sich."
+    ),
     ContextTooLong(
-        "not sent: the conversation is estimated at {0} tokens, past the budget of {1}. Compact it, start a new conversation, or raise the budget.",
-        "niet verzonden: het gesprek wordt geschat op {0} tokens, voorbij het budget van {1}. Compact het, start een nieuw gesprek, of verhoog het budget.",
-        "non envoyé : la conversation est estimée à {0} jetons, au-delà du budget de {1}. Compactez-la, démarrez une nouvelle conversation ou relevez le budget.",
-        "nicht gesendet: die Unterhaltung wird auf {0} Token geschätzt, über dem Budget von {1}. Kompaktieren Sie sie, starten Sie eine neue Unterhaltung oder erhöhen Sie das Budget."
+        "not sent: this conversation is too large for the model. Nothing left your machine, so your message is still in the box. Compact it, start a new conversation, or raise the context budget in Settings.",
+        "niet verzonden: dit gesprek is te groot voor het model. Er heeft niets je machine verlaten, dus je bericht staat nog in het vak. Compact het, start een nieuw gesprek, of verhoog het contextbudget in de instellingen.",
+        "non envoyé : cette conversation est trop grande pour le modèle. Rien n'a quitté votre machine, votre message est donc toujours dans la zone de saisie. Compactez-la, démarrez une nouvelle conversation ou relevez le budget de contexte dans les réglages.",
+        "nicht gesendet: diese Unterhaltung ist zu groß für das Modell. Nichts hat Ihren Rechner verlassen, Ihre Nachricht steht also noch im Eingabefeld. Kompaktieren Sie sie, starten Sie eine neue Unterhaltung oder erhöhen Sie das Kontextbudget in den Einstellungen."
     ),
     ContextOverflow(
-        "the prompt no longer fits the model's context window. Compact this conversation (the Compact button folds it in batches, so it works even now), or start a new conversation.",
-        "de prompt past niet meer in het contextvenster van het model. Compact dit gesprek (de knop Compacten vouwt het in delen, dus dat lukt nu ook), of start een nieuw gesprek.",
-        "le prompt ne tient plus dans la fenêtre de contexte du modèle. Compactez cette conversation (le bouton Compresseur la replie par lots, il fonctionne donc encore) ou démarrez une nouvelle conversation.",
-        "der Prompt passt nicht mehr in das Kontextfenster des Modells. Kompaktieren Sie diese Unterhaltung (die Schaltfläche Kompaktieren faltet sie in Portionen, das gelingt jetzt auch) oder starten Sie eine neue Unterhaltung."
+        "the model ran out of room for this conversation. Compact it to fold the older turns into a summary, or start a new conversation to begin with a clean window.",
+        "het model heeft geen ruimte meer voor dit gesprek. Compact het om oudere beurten in een samenvatting te vouwen, of start een nieuw gesprek met een leeg venster.",
+        "le modèle n'a plus de place pour cette conversation. Compactez-la pour replier les anciens tours dans un résumé, ou démarrez une nouvelle conversation avec une fenêtre vierge.",
+        "dem Modell fehlt der Platz für diese Unterhaltung. Kompaktieren Sie sie, um ältere Runden in einer Zusammenfassung zu falten, oder starten Sie eine neue Unterhaltung mit einem leeren Fenster."
     ),
     // ---- tools (settings) ---------------------------------------------------
     ToolModeLabel("tool mode", "toolmodus", "mode d'outil", "Werkzeugmodus"),
@@ -306,6 +331,9 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     DiffNoGit("This folder is not a git repository.", "Deze map is geen git-repository.", "Ce dossier n'est pas un dépôt Git.", "Dieser Ordner ist kein Git-Repository."),
     DiffNoChanges("{0} has no git changes.", "{0} heeft geen git-wijzigingen.", "{0} n'a aucune modification Git.", "{0} weist keine Git-Änderungen auf."),
     DiffUntracked("{0} is new and untracked, so there is no committed version to compare.", "{0} is nieuw en niet gevolgd, er is dus geen vastgelegde versie om mee te vergelijken.", "{0} est nouveau et non suivi, il n'y a donc pas de version enregistrée à comparer.", "{0} ist neu und nicht verfolgt, daher gibt es keine gespeicherte Version zum Vergleich."),
+    FileTitle("File: {0}", "Bestand: {0}", "Fichier : {0}", "Datei: {0}"),
+    DiffShowFile("Show file", "Bestand tonen", "Afficher le fichier", "Datei anzeigen"),
+    DiffShowPatch("Show changes", "Wijzigingen tonen", "Afficher les modifications", "Änderungen anzeigen"),
     GitTagAdded("added", "toegevoegd", "ajouté", "hinzugefügt"),
     GitTagModified("modified", "gewijzigd", "modifié", "geändert"),
     GitTagDeleted("deleted", "verwijderd", "supprimé", "gelöscht"),

@@ -1,20 +1,25 @@
 package dev.mule.app
 
+import dev.mule.api.BackendException
+import dev.mule.api.ModelWindows
 import dev.mule.api.ResponsesClient
 import dev.mule.api.Turn
 import dev.mule.config.AppConfig
+import dev.mule.config.ContextStrategy
 import dev.mule.config.ToolMode
 import dev.mule.i18n.Key
 import dev.mule.i18n.Texts
 import dev.mule.project.FolderPermission
 import dev.mule.project.Project
 import dev.mule.session.Compactor
+import dev.mule.session.ContextTrimmer
 import dev.mule.session.Msg
 import dev.mule.session.SessionIds
 import dev.mule.session.SessionState
 import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
 import dev.mule.tool.CallExtractor
+import dev.mule.tool.CommandSignature
 import dev.mule.tool.EditFileTool
 import dev.mule.tool.ExecuteTool
 import dev.mule.tool.GitTool
@@ -188,14 +193,29 @@ class AppState(val store: H2Store) {
     fun setProjectArchived(id: String, archived: Boolean) = store.setArchived(id, archived)
 
     /**
-     * Pin an exact command to the always-allow list and persist it, so the next identical
-     * command runs without a prompt. Persists with [H2Store.save] alone rather than
-     * [saveConfig]: an allow-list change must not fire [onConfigSaved], which would rebuild
-     * the panels for something the running turn reads from config on its next call anyway.
+     * The pinned commands as they stand right now. Read per tool call rather than once per turn,
+     * and copied under the same lock [allowCommandAlways] writes under: the tool loop asks from
+     * its worker thread while a click on the event thread can be adding to that very list, and
+     * copying an ArrayList mid-add is how a permission becomes an exception.
+     */
+    fun allowedCommands(): Set<String> =
+        synchronized(config.autoAllowCommands) { config.autoAllowCommands.toSet() }
+
+    /**
+     * Pin a command to the always-allow list and persist it, so the next matching command runs
+     * without a prompt -- including the next call of the turn that is running now, since
+     * [allowedCommands] is read afresh on every call. What is stored is [CommandSignature.pinned]:
+     * a simple command pins to its signature so one decision covers its variations, while a chain
+     * pins to its verbatim text so it is trusted exactly as approved. Persists with [H2Store.save]
+     * alone rather than [saveConfig]: an allow-list change must not fire [onConfigSaved], which
+     * would rebuild the panels for something the running turn reads from config on its next call.
      */
     fun allowCommandAlways(command: String) {
-        if (command in config.autoAllowCommands) return
-        config.autoAllowCommands.add(command)
+        val pinned = CommandSignature.pinned(command)
+        synchronized(config.autoAllowCommands) {
+            if (pinned in config.autoAllowCommands) return
+            config.autoAllowCommands.add(pinned)
+        }
         store.save(config)
     }
 
@@ -221,25 +241,110 @@ class AppState(val store: H2Store) {
     /** Rename one conversation; a blank title reverts to the derived first-line title. */
     fun renameSession(id: String, title: String) = store.renameSession(id, title)
 
+    /** The identity a learned window belongs to: a number learned off another server or model is stale. */
+    private fun windowKey(): String = "${config.baseUrl}|${config.model}"
+
     /**
-     * Why this conversation must not go out as it stands, or null when it may. The estimate is
-     * the same one the status line shows, so the number the user sees and the number that stops
-     * the send cannot disagree. This refuses before the request rather than after the backend's
-     * answer: a prompt that is too long never reaches the model, so nothing is billed, nothing
-     * streams into the panel, and the text the user typed stays in the input box. It measures the
-     * conversation rather than the request, because a server-side session replays the stored
-     * turns itself -- that is exactly how a chained session outgrows the window. The reply's own
-     * budget is held back too, so a conversation is refused a little before the bar reads full.
+     * The window this model really has, or null when nobody told us. A number the backend refused
+     * against beats the built-in table: a refusal is evidence about this exact server and model,
+     * while the table is an estimate about a family. A learned number is trusted only under the key
+     * it was learned on, so switching server or model drops it back to the table.
+     */
+    fun contextWindowTokens(): Int? {
+        if (config.learnedContextWindow > 0 && config.learnedContextKey == windowKey())
+            return config.learnedContextWindow
+        return ModelWindows.known(config.model)
+    }
+
+    /** What Settings holds, or null when it is 0 or blank, which means "the app decides". */
+    private fun typedBudgetTokens(): Int? = config.contextBudgetTokens.takeIf { it > 0 }
+
+    /** A typed budget can only lower a ceiling, never raise it: it is a cap, not a floor. */
+    private fun cappedByBudget(limit: Int): Int = typedBudgetTokens()?.let { minOf(it, limit) } ?: limit
+
+    /**
+     * The last ceiling: at or above this the turn is refused, because this is where the backend
+     * would refuse it. The model's window less a margin, so a request cannot land exactly on the
+     * window and still be turned down. Where no window is known this is simply what Settings holds,
+     * and 0 there means off: nothing better may be invented.
+     */
+    private fun hardCeilingTokens(): Int {
+        val window = contextWindowTokens() ?: return typedBudgetTokens() ?: 0
+        return cappedByBudget((window - WINDOW_MARGIN_TOKENS).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS))
+    }
+
+    /**
+     * The early ceiling, where folding starts. It sits well inside the window on purpose: the
+     * conversation is measured as characters over three, and dense JSON -- which is what a tool
+     * transcript mostly is -- costs more tokens per character than that estimate assumes, so a
+     * ceiling near the window is passed in reality before it is passed on paper. Folding at three
+     * quarters keeps that error inside the margin. A budget the user typed lowers it further.
+     */
+    private fun foldCeilingTokens(): Int {
+        val window = contextWindowTokens() ?: return typedBudgetTokens() ?: 0
+        val early = (window * FOLD_WINDOW_PERCENT / 100).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS)
+        // Never later than the refusal it exists to prevent.
+        return minOf(cappedByBudget(early), hardCeilingTokens())
+    }
+
+    /** Whether this conversation plus the reply it must leave room for reaches [ceiling]. */
+    private fun over(ceiling: Int): Boolean {
+        if (ceiling <= 0) return false
+        val reserve = config.maxOutputTokens.coerceAtLeast(0)
+        return session.estimateTokens() + reserve > ceiling
+    }
+
+    /**
+     * The token budget the sent window is trimmed to: the early ceiling, shrunk by [shrinkPct] on a
+     * retry so each attempt reaches for a smaller window than the one the backend just refused. It is
+     * 0 when no window is known, which [ContextTrimmer] reads as leave the conversation alone.
+     */
+    private fun trimBudgetTokens(shrinkPct: Int): Long =
+        (foldCeilingTokens() * shrinkPct / 100).toLong()
+
+    /**
+     * The copy of the conversation handed to the model for one turn. Under StopAtLimit this is the
+     * whole transcript, because the guard already refused anything oversized before it could reach
+     * here. Under the trimming strategies it is a bounded window; the stored transcript is never
+     * edited, so what the user reads in the panel stays whole.
+     */
+    private fun outbound(s: SessionState, shrinkPct: Int): List<Msg> =
+        if (config.contextStrategy == ContextStrategy.StopAtLimit) s.promptHistory()
+        else ContextTrimmer.trim(s.promptHistory(), config.contextStrategy, trimBudgetTokens(shrinkPct))
+
+    /** The server chain id to reuse for one turn, or null to replay from the client instead. Trimming
+     *  always replays, because editing what we send cannot shrink a chain the backend already holds. */
+    private fun chainedPrev(s: SessionState): String? =
+        if (config.contextStrategy == ContextStrategy.StopAtLimit && config.useServerSession)
+            s.previousResponseId else null
+
+    /**
+     * Record the window a refusal named, when it named one. Persisted at once: the number is worth
+     * exactly as much after a restart as on the next turn, and losing it means failing again in the
+     * same way. This never raises what the user set -- a typed budget only ever lowers a ceiling,
+     * in [cappedByBudget].
+     */
+    fun learnContextWindow(claimed: Int?) {
+        if (claimed == null || claimed <= 0) return
+        if (config.learnedContextWindow == claimed && config.learnedContextKey == windowKey()) return
+        config = config.copy(learnedContextWindow = claimed, learnedContextKey = windowKey())
+        store.save(config)
+    }
+
+    /**
+     * Why this turn must not go out as it stands, or null when it may. This refuses only under
+     * [ContextStrategy.StopAtLimit]: the trimming strategies bound the window instead of refusing, so
+     * they never reach a refusal here -- that silence is the whole point of making trimming the
+     * default. Where it does refuse, it does so before the request rather than after the backend's
+     * answer, so nothing is billed and the text the user typed stays in the input box. The message
+     * names no token count on purpose: those counts belong in the status line, not in an error the
+     * user has to read.
      */
     fun contextGuard(): String? {
-        val budget = config.contextBudgetTokens
-        if (budget <= 0) return null
-        // Reserve the reply: the input must leave the model room to answer, so the ceiling on
-        // the conversation is the budget minus the configured output. 0 output asks the server
-        // to decide and reserves nothing here.
-        val reserve = config.maxOutputTokens.coerceAtLeast(0)
-        val used = session.estimateTokens()
-        return if (used + reserve > budget) Texts.fmt(Key.ContextTooLong, used, budget) else null
+        if (config.contextStrategy != ContextStrategy.StopAtLimit) return null
+        val ceiling = hardCeilingTokens()
+        if (ceiling <= 0) return null
+        return if (over(ceiling)) Texts[Key.ContextTooLong] else null
     }
 
     /**
@@ -251,23 +356,10 @@ class AppState(val store: H2Store) {
      * loop prepends. 0 when no budget is configured, which disables the ceiling entirely.
      */
     private fun contextCeilingTokens(): Long {
-        val budget = config.contextBudgetTokens
+        val budget = hardCeilingTokens()
         if (budget <= 0) return 0L
         val reserve = config.maxOutputTokens.coerceAtLeast(0) + INPUT_OVERHEAD_TOKENS
         return (budget - reserve).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS).toLong()
-    }
-
-    /**
-     * Fold the older turns away before a turn that would not fit, so a long conversation keeps going
-     * instead of being refused. It runs off the EDT and acts only when a budget is set and the guard
-     * would actually refuse: a conversation with room to spare is left untouched. The summary it
-     * produces rides into the next request through the system prompt, which is why it need not wait
-     * for the user to press Compact. It reuses [compact], so it claims the turn lock and persists.
-     */
-    fun autoCompactIfNeeded() {
-        if (config.contextBudgetTokens <= 0) return
-        if (contextGuard() == null) return
-        compact(AUTO_COMPACT_KEEP_LAST) {}
     }
 
     fun serverSessionActive(): Boolean =
@@ -333,11 +425,33 @@ class AppState(val store: H2Store) {
         val s = session
         s.messages.add(Msg("user", userText))
         val afterPrompt = s.messages.size
+        var shrinkPct = 100
+        var attempt = 0
         try {
-            val turn = if (toolsActive(s)) runToolTurn(s, onDelta, onReasoning)
-            else runPlainTurn(s, onDelta, onReasoning)
-            persistTo(s)
-            return turn
+            while (true) {
+                try {
+                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, onDelta, onReasoning)
+                    else runPlainTurn(s, shrinkPct, onDelta, onReasoning)
+                    persistTo(s)
+                    return turn
+                } catch (e: BackendException) {
+                    // A trimming strategy turns a refusal into a smaller window rather than an error
+                    // for the user: the refusal names the window the backend really has, so record it
+                    // and send the same turn again against a window that shrinks each try. Only worth
+                    // doing when nothing was appended yet -- a turn that already ran a real edit must
+                    // not be replayed, and StopAtLimit refuses on purpose rather than retrying.
+                    if (e.contextOverflow &&
+                        config.contextStrategy != ContextStrategy.StopAtLimit &&
+                        attempt < MAX_OVERFLOW_RETRIES && s.messages.size == afterPrompt
+                    ) {
+                        learnContextWindow(e.claimedContextTokens)
+                        attempt++
+                        shrinkPct = shrinkPct * OVERFLOW_SHRINK_STEP / 100
+                        continue
+                    }
+                    throw e
+                }
+            }
         } catch (e: Exception) {
             // The plain path lands nothing on a failure, so the only new message is the
             // prompt: drop it and keep the conversation clean. The tool path may already
@@ -360,14 +474,18 @@ class AppState(val store: H2Store) {
     /** The one-shot reply this app had before tools: one Responses call, then done. */
     private fun runPlainTurn(
         s: SessionState,
+        shrinkPct: Int,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
-        val prev = if (config.useServerSession) s.previousResponseId else null
-        // The prompt is already the last stored message, so Transcript takes it as the current
-        // input and returns only what precedes it: sent once instead of twice, scrubbed, and cut
-        // to what one call can carry, which is the same bound the tool loop runs under.
-        val (prior, prompt) = Transcript.forCall(s.promptHistory())
+        val prev = chainedPrev(s)
+        // The prompt is the last stored message, so it is taken as the current input and only what
+        // precedes it is replayed -- sent once, not twice, and scrubbed. Under a trimming strategy the
+        // window was already bounded by outbound, so it is split without the fixed replay clamp that
+        // would otherwise undo it; under StopAtLimit the transcript goes whole and the old clamp holds.
+        val (prior, prompt) =
+            if (config.contextStrategy == ContextStrategy.StopAtLimit) Transcript.forCall(outbound(s, shrinkPct))
+            else Transcript.splitForWindow(outbound(s, shrinkPct))
         val turn = ResponsesClient(config).turn(
             system = instructionsFor(s),
             history = prior,
@@ -390,6 +508,7 @@ class AppState(val store: H2Store) {
      */
     private fun runToolTurn(
         s: SessionState,
+        shrinkPct: Int,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
@@ -405,7 +524,7 @@ class AppState(val store: H2Store) {
             execGranted = executable,
             approveCommand = approveCommand,
             readGranted = readGranted,
-            autoAllow = config.autoAllowCommands.toSet(),
+            autoAllow = { allowedCommands() },
             autoApproveSafe = config.autoApproveSafeCommands
         )
         // Build the enabled tools once, then advertise exactly those in the prompt: the registry
@@ -424,14 +543,14 @@ class AppState(val store: H2Store) {
             registry = ToolRegistry(tools),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
-            chainResponseId = config.useServerSession && s.previousResponseId != null,
+            chainResponseId = chainedPrev(s) != null,
             contextCeiling = contextCeilingTokens()
         )
         // The sink appends each assistant message and tool observation as the loop produces
         // them, so a later failure cannot discard a real edit already made on disk.
         val outcome = loop.run(
-            history = s.promptHistory(),
-            previousResponseId = s.previousResponseId,
+            history = outbound(s, shrinkPct),
+            previousResponseId = chainedPrev(s),
             ctx = context,
             onDelta = onDelta,
             onReasoning = onReasoning,
@@ -458,7 +577,10 @@ class AppState(val store: H2Store) {
             throw IllegalStateException("a turn is already running")
         }
         try {
-            val s = Compactor(config).compact(session, keepLast, onDelta)
+            // The window is handed in rather than looked up here, so the fold is guarded against the
+            // same number the turn guard is: the one this backend proved, or the table's estimate for
+            // this model. Two ceilings that disagree is how a fold overflows on a small model.
+            val s = Compactor(config, contextWindowTokens()).compact(session, keepLast, onDelta)
             persist()
             return s
         } finally {
@@ -481,11 +603,17 @@ class AppState(val store: H2Store) {
     }
 
     fun contextWarning(): String {
-        val used = session.estimateTokens()
-        val budget = config.contextBudgetTokens
+        val budget = foldCeilingTokens()
+        val trimming = config.contextStrategy != ContextStrategy.StopAtLimit
+        // Under a trimming strategy the bar shows the size of the window actually sent, not the whole
+        // transcript -- the transcript keeps growing, but that is harmless while a window is trimmed to
+        // fit, so showing it would alarm without cause. StopAtLimit shows the whole conversation and
+        // keeps nudging toward the manual Compact button, which is the only way forward there.
+        val used = if (trimming) SessionState.estimateTokensOf(outbound(session, 100))
+        else session.estimateTokens()
         val pct = if (budget <= 0) 0 else (used * 100 / budget)
-        return "~${used} / $budget tokens (${pct}%)" +
-            if (pct > 80) Texts[Key.CompactRecommended] else ""
+        return if (trimming) "~${used} / $budget tokens (${pct}%)"
+        else "~${used} / $budget tokens (${pct}%)" + if (pct > 80) Texts[Key.CompactRecommended] else ""
     }
 
     companion object {
@@ -493,8 +621,18 @@ class AppState(val store: H2Store) {
         private const val INPUT_OVERHEAD_TOKENS = 2000
         /** Floor so a small budget still lets the loop make at least one modest request. */
         private const val MIN_CONTEXT_CEILING_TOKENS = 1024
-        /** Turns kept verbatim after an automatic compaction; the rest folds into the summary. */
-        private const val AUTO_COMPACT_KEEP_LAST = 4
+        /** Refusals to absorb before giving up and reporting: each retry aims at a smaller window. */
+        private const val MAX_OVERFLOW_RETRIES = 2
+        /** How much of the previous window a retry reaches for, as a percentage -- a shrinking bound. */
+        private const val OVERFLOW_SHRINK_STEP = 60
+        /**
+         * Room held back between the model's stated window and what we treat as usable. A window is
+         * the total the backend counts, and a request that lands exactly on it is still refused, so
+         * the ceiling has to sit inside it by more than the reply alone.
+         */
+        private const val WINDOW_MARGIN_TOKENS = 4_096
+        /** Where folding starts, as a percentage of the window; the refusal happens at its edge. */
+        private const val FOLD_WINDOW_PERCENT = 75
 
         /**
          * The data directory. Defaults to a per-user location that does not depend

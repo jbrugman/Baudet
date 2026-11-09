@@ -18,6 +18,9 @@ data class Span(val text: String, val kind: SpanKind)
  * such as max_output_tokens, and turning those into italics would corrupt the one thing the
  * reader needed verbatim. An unmatched marker is never removed either: a model that writes a
  * stray asterisk meant a stray asterisk.
+ *
+ * Emphasis also has to be flanked: a marker only pairs when it touches the text it styles, so
+ * the two asterisks of a multiplication stay arithmetic.
  */
 object Markdown {
 
@@ -75,9 +78,11 @@ object Markdown {
                     continue
                 }
             }
-            if (bold) {
+            if (bold && i + 2 < text.length) {
                 val end = text.indexOf("**", i + 2)
-                if (end > i + 1) {
+                // Both markers have to hug their content. "** b **" has a pair to a scanner and
+                // nothing at all to a reader, so it is left as written.
+                if (end > i + 2 && !text[i + 2].isWhitespace() && !text[end - 1].isWhitespace()) {
                     flushPlain()
                     spans += Span(text.substring(i + 2, end), SpanKind.Bold)
                     i = end + 2
@@ -86,7 +91,10 @@ object Markdown {
             }
             if (italic) {
                 val end = text.indexOf('*', i + 1)
-                if (end > i && text[end - 1] != '*') {
+                // Same flank for one asterisk: without it the pair in "2 * 3 * 4" is found and
+                // " 3 " turns italic, and a multiplication is exactly what a coding answer
+                // needs to show verbatim.
+                if (end > i + 1 && !text[i + 1].isWhitespace() && !text[end - 1].isWhitespace()) {
                     flushPlain()
                     spans += Span(text.substring(i + 1, end), SpanKind.Italic)
                     i = end + 1

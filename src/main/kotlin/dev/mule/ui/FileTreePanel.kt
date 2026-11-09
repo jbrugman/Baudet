@@ -64,8 +64,9 @@ import javax.swing.tree.TreePath
  * When the folder is a git repository each file row carries its change state: added or
  * changed files are green, deleted ones red (shown as a ghost row even though the file is
  * gone from disk), untracked ones blue, and the tooltip names the state. Double-clicking a
- * file opens its git patch in [DiffViewDialog]. A right-click anywhere on a row offers
- * [Key.CopyPath]. There is still no editor, so the panel stays a read-only view.
+ * file opens its git patch in [DiffViewDialog], which can also switch to the file itself,
+ * read verbatim. A right-click anywhere on a row offers [Key.CopyPath]. There is still no
+ * editor: the panel reads, and never writes.
  *
  * The panel is split vertically: the tree keeps the top, so the project structure stays in
  * view, and a flat list of only the added, changed and deleted files sits below it behind a
@@ -421,11 +422,21 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
     /** Show the patch for [rel], or why there is none: no repository, untracked, or unchanged. */
     private fun openPatch(rel: String, path: Path, change: FileChange?) {
         val root = rootPath ?: return
+        // Read once, up front: whether the file itself can be shown decides the switch in the
+        // viewer, and that question is the same in every branch below. NewFileDiff.plain already
+        // refuses a missing file, a binary and anything over its size cap.
+        val fileBody = NewFileDiff.plain(readBytesOrNull(path))
+        val fileTitle = Texts.fmt(Key.FileTitle, rel)
         if (!gitStatus.isRepository) {
+            // Nothing to diff against anywhere in this folder, so the file is the only thing worth
+            // opening for: start there rather than on a message the user can do nothing with.
             DiffViewDialog.open(
                 tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit],
                 state.config.diffPopupX, state.config.diffPopupY,
                 state.config.diffPopupWidth, state.config.diffPopupHeight,
+                fileBody = fileBody,
+                fileTitle = fileTitle,
+                fileFirst = fileBody != null,
                 onClosed = { x, y, w, h -> state.updateDiffPopupBounds(x, y, w, h) }
             )
             return
@@ -438,7 +449,7 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
             else -> {
                 // Nothing changed, so there is no patch: the message says so and the file itself
                 // follows below in the aside gray, which is what makes the dialog worth opening.
-                plain = NewFileDiff.plain(readBytesOrNull(path))
+                plain = fileBody
                 Texts.fmt(Key.DiffNoChanges, rel)
             }
         }
@@ -447,6 +458,8 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
             state.config.diffPopupX, state.config.diffPopupY,
             state.config.diffPopupWidth, state.config.diffPopupHeight,
             plainBody = plain,
+            fileBody = fileBody,
+            fileTitle = fileTitle,
             onClosed = { x, y, w, h -> state.updateDiffPopupBounds(x, y, w, h) }
         )
     }

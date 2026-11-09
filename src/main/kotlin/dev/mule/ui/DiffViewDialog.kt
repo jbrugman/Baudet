@@ -2,15 +2,21 @@ package dev.mule.ui
 
 import dev.mule.diff.DiffHighlight
 import dev.mule.diff.DiffLineKind
+import dev.mule.i18n.Key
+import dev.mule.i18n.Texts
+import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
 import java.awt.Dialog
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GraphicsEnvironment
 import java.awt.Insets
 import java.awt.Rectangle
+import javax.swing.JButton
 import javax.swing.JDialog
+import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
@@ -34,6 +40,12 @@ import javax.swing.text.StyleContext
  * the normal color and the file content follows below it in the same muted gray the chat uses
  * for reasoning. Those lines are never classified as diff lines, so content that happens to
  * start with a plus or a minus cannot be mistaken for an addition or a removal.
+ *
+ * When the file itself is readable it can also be shown whole, through [fileBody] and
+ * [fileTitle]: a button at the bottom then switches the window between the patch and the file,
+ * verbatim and uncolored. That is the whole of it -- a way to read a file and copy from it, not
+ * a place to change one. [fileFirst] opens it on the file instead, which is what a folder
+ * outside git gets, since for it there is no patch to show at all.
  */
 object DiffViewDialog {
 
@@ -46,6 +58,9 @@ object DiffViewDialog {
         rememberedW: Int,
         rememberedH: Int,
         plainBody: String? = null,
+        fileBody: String? = null,
+        fileTitle: String? = null,
+        fileFirst: Boolean = false,
         onClosed: (x: Int, y: Int, width: Int, height: Int) -> Unit
     ) {
         val parent = SwingUtilities.getWindowAncestor(owner)
@@ -58,13 +73,46 @@ object DiffViewDialog {
             isEditable = false
             margin = Insets(8, 8, 8, 8)
         }
-        renderDiff(pane, text, plainBody)
+        var showsFile = fileBody != null && fileFirst
+
+        // Both bodies go through one renderer, so switching cannot leave the previous one behind
+        // or keep the other one's title. Clearing through setText rather than the document keeps
+        // the pane on the styled document it was built with, so the styles inserted below resolve
+        // exactly as they did on the first render.
+        fun render() {
+            pane.text = ""
+            dialog.title = if (showsFile) fileTitle ?: title else title
+            if (showsFile) renderFile(pane, fileBody.orEmpty()) else renderDiff(pane, text, plainBody)
+            pane.caretPosition = 0
+        }
+        render()
+
+        dialog.contentPane.layout = BorderLayout()
         dialog.contentPane.add(JScrollPane(pane).apply {
             preferredSize = Dimension(
                 WindowLayout.resolveDialogSize(rememberedW, DEFAULT_WIDTH),
                 WindowLayout.resolveDialogSize(rememberedH, DEFAULT_HEIGHT)
             )
-        })
+        }, BorderLayout.CENTER)
+        // The switch appears only when a second body exists. A deleted file, a binary or one over
+        // the size cap has no readable content, and a button that switches to nothing is a lie.
+        if (fileBody != null && fileTitle != null) {
+            val toggle = JButton()
+            toggle.isFocusable = false
+            fun relabel() {
+                toggle.text = Texts[if (showsFile) Key.DiffShowPatch else Key.DiffShowFile]
+            }
+            toggle.addActionListener {
+                showsFile = !showsFile
+                render()
+                relabel()
+            }
+            relabel()
+            dialog.contentPane.add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 6, 4)).apply { add(toggle) },
+                BorderLayout.SOUTH
+            )
+        }
         // pack realizes the native peer, so the placement below lands: a location set before
         // the peer exists is dropped on macOS, the same reason the main window only trusts a
         // saved spot once the window is displayable.
@@ -90,10 +138,7 @@ object DiffViewDialog {
      */
     private fun renderDiff(pane: JTextPane, text: String, plainBody: String?) {
         val context = StyleContext()
-        val base = context.addStyle("base", null).apply {
-            StyleConstants.setFontFamily(this, Font.MONOSPACED)
-            StyleConstants.setFontSize(this, 12)
-        }
+        val base = baseStyle(context)
         val styles = DiffLineKind.entries.associateWith { kind -> styleFor(context, base, kind) }
         val plainStyle = context.addStyle("plain", base).apply {
             StyleConstants.setForeground(this, COLOR_PLAIN)
@@ -104,8 +149,31 @@ object DiffViewDialog {
             doc.insertString(doc.length, "\n\n", base)
             insertLines(doc, plainBody.split("\n"), base) { plainStyle }
         }
-        pane.caretPosition = 0
     }
+
+    /**
+     * Fill [pane] with one file's own text: monospaced, one color for every line, and no line
+     * classified at all. That last part is the reason this is a separate renderer -- a file whose
+     * first line happens to start with a plus is not an edit somebody made, and coloring it as
+     * one would invent the very change the reader opened the window to check on.
+     */
+    private fun renderFile(pane: JTextPane, body: String) {
+        val context = StyleContext()
+        val base = baseStyle(context)
+        // The same near-white a patch uses for its file header, so a whole file reads in the one
+        // tone the patch view already reserves for text that is neither added nor removed.
+        val fileStyle = context.addStyle("file", base).apply {
+            StyleConstants.setForeground(this, COLOR_FILE_HEADER)
+        }
+        insertLines(pane.styledDocument, body.split("\n"), base) { fileStyle }
+    }
+
+    /** The monospaced base every other style in either view inherits. */
+    private fun baseStyle(context: StyleContext): Style =
+        context.addStyle("base", null).apply {
+            StyleConstants.setFontFamily(this, Font.MONOSPACED)
+            StyleConstants.setFontSize(this, 12)
+        }
 
     /** Write [lines] to [doc], each under the style [styleOf] picks, separated by newlines. */
     private fun insertLines(

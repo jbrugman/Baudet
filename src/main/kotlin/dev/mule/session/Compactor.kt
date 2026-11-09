@@ -9,7 +9,7 @@ import dev.mule.config.AppConfig
  * the result replaces the older turns. Exactly what Codex itself does. Runs as
  * a separate, cheap call with store=false.
  */
-class Compactor(private val cfg: AppConfig) {
+class Compactor(private val cfg: AppConfig, private val windowTokens: Int? = null) {
 
     /** Model-facing, so always English: this is what tells the model to summarize. */
     private val systemPrompt =
@@ -70,9 +70,25 @@ class Compactor(private val cfg: AppConfig) {
      * [SessionState.estimateTokens]; the hard ceiling is what actually protects the request,
      * because the configured budget is the user's guess and can itself sit at the model's
      * window. At this ceiling a call carries roughly sixteen thousand tokens.
+     *
+     * A budget typed in Settings lowers the ceiling but never sets it. It used to: the field reads 0
+     * when the app is left to derive it, and a ceiling of 0 reached the backend uncapped, because
+     * [CompactionPlan.source] reads a non-positive ceiling as "no ceiling" while
+     * [CompactionPlan.foldBatch] always takes at least one turn. A conversation whose oldest turn was
+     * a large tool observation was therefore folded in one piece and refused with the very context
+     * error the Compact button exists to clear, which is how a session gets stranded twice.
+     *
+     * The model's real window bounds it too, and that bound is not the same kind of number: a 4k
+     * model cannot carry 48k characters, so on such a model the default ceiling is itself the bug.
+     * [windowTokens] is handed in by the caller rather than looked up, so fold and turn guard cannot
+     * end up measuring against two different windows.
      */
-    private fun maxSourceChars(): Int =
-        (cfg.contextBudgetTokens * 3).coerceAtMost(MAX_SOURCE_CHARS)
+    internal fun maxSourceChars(): Int =
+        minOf(
+            MAX_SOURCE_CHARS,
+            (cfg.contextBudgetTokens * 3).takeIf { it > 0 } ?: MAX_SOURCE_CHARS,
+            windowTokens?.takeIf { it > 0 }?.let { it / SOURCE_WINDOW_DIVISOR * 3 } ?: Int.MAX_VALUE
+        ).coerceAtLeast(MIN_SOURCE_CHARS)
 
     companion object {
         /** Output bound for one summary call: a summary is meant to be short. */
@@ -80,6 +96,24 @@ class Compactor(private val cfg: AppConfig) {
 
         /** Ceiling on the text of one summarization call, in characters. */
         private const val MAX_SOURCE_CHARS = 48_000
+
+        /**
+         * Floor under a typed budget. Below this a batch is a fragment of one turn, and a summary
+         * cut from a fragment still reports itself complete -- so it would be accepted and the turns
+         * it never read would be cleared. A budget that small is a mistake, not an instruction.
+         *
+         * It also wins over a window too small to hold a batch, on purpose: failing with a refusal
+         * is recoverable, summarizing a fragment and then clearing the turns it never read is not.
+         */
+        private const val MIN_SOURCE_CHARS = 4_000
+
+        /**
+         * A summarization call may use half the model's window. The other half has to hold the
+         * summary it writes, the instructions above it and whatever the backend counts on top --
+         * and unlike a chat turn the fold has no second chance to shrink: a batch that overflows is
+         * a batch that is not folded, on the one conversation that needed folding most.
+         */
+        private const val SOURCE_WINDOW_DIVISOR = 2
 
         /**
          * Whether [turn] may replace the older turns. Those turns are gone the moment they are

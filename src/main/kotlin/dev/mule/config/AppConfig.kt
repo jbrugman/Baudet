@@ -23,13 +23,26 @@ data class AppConfig(
     var language: String = "en",
 
     /**
-     * Reasoning models spend part of this budget on the summary before the
-     * answer starts, so a chat-sized default truncates them before any answer
-     * exists; the surplus is not paid for unless the model reasons.
+     * The ceiling on the reply a turn may produce. 0 -- the default -- omits the field so the
+     * server and the model decide, which is what a local backend should do unless the user has a
+     * reason to cap it. A reasoning model spends part of any positive cap on its summary before the
+     * answer starts, so a small cap truncates it before an answer exists; leaving it at 0 avoids
+     * paying that cost unless the user asks for a hard bound.
      */
-    var maxOutputTokens: Int = 4096,
-    /** Rough context budget; drives the warning bar and the compaction trigger. */
-    var contextBudgetTokens: Int = 32768,
+    var maxOutputTokens: Int = 0,
+    /**
+     * The ceiling a turn is guarded against, in tokens. 0 -- the default -- lets the app derive it
+     * from the model's context window: trim the sent window at three quarters of it, and under
+     * [ContextStrategy.StopAtLimit] refuse at its edge. A typed number acts as a ceiling on top of
+     * that, never as a floor, so a small value keeps a conversation deliberately cheap while a large
+     * one cannot push a request past the model.
+     */
+    var contextBudgetTokens: Int = 0,
+    /**
+     * What the app does when a conversation reaches that ceiling. Trimming is the default so a long
+     * conversation simply keeps going instead of being refused; see [ContextStrategy].
+     */
+    var contextStrategy: ContextStrategy = ContextStrategy.TruncateAtMiddle,
     var temperature: Double = 0.7,
     var topP: Double? = null,
     /** null = do not send. Values like minimal|low|medium|high, model dependent. */
@@ -92,7 +105,16 @@ data class AppConfig(
     var diffPopupX: Int = 0,
     var diffPopupY: Int = 0,
     var diffPopupWidth: Int = 0,
-    var diffPopupHeight: Int = 0
+    var diffPopupHeight: Int = 0,
+    /**
+     * The context window a refusal taught us, kept with the [learnedContextKey] it was learned
+     * under so a model or server switch cannot leave a stale number behind. This is not a setting:
+     * the user never types it. It exists because the app otherwise has to guard a turn against a
+     * size nobody told it, which is how a conversation gets sent to a backend that can only
+     * reject it. Zero means never learned.
+     */
+    var learnedContextWindow: Int = 0,
+    var learnedContextKey: String = ""
 ) {
     /** Key resolution: UI input wins, then the environment. Never hardcoded. */
     fun resolvedApiKey(): String =
