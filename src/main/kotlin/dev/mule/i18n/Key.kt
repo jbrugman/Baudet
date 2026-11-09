@@ -241,6 +241,19 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     ),
     FileTreeEmpty("empty folder", "lege map", "dossier vide", "leerer Ordner"),
     CopyPath("Copy path", "Kopieer pad", "Copier le chemin", "Pfad kopieren"),
+    FileTreeChangesHeader(
+        "changes ({0})", "wijzigingen ({0})", "modifications ({0})", "Änderungen ({0})"
+    ),
+    FileTreeChangesClean("no changes", "geen wijzigingen", "aucune modification", "keine Änderungen"),
+    FileTreeChangesNotGit(
+        "not a git repository", "geen git-repository", "n'est pas un dépôt Git", "kein Git-Repository"
+    ),
+    TipFileTreeChanges(
+        "Only the files git sees as new, changed or deleted. Double-click one for its patch; drag the bar above to give this list more or less room.",
+        "Alleen de bestanden die git als nieuw, gewijzigd of verwijderd ziet. Dubbelklik voor de patch; sleep de balk erboven om deze lijst meer of minder ruimte te geven.",
+        "Seulement les fichiers que Git voit comme nouveaux, modifiés ou supprimés. Double-cliquez pour la patch ; faites glisser la barre du haut pour donner plus ou moins de place à cette liste.",
+        "Nur die Dateien, die Git als neu, geändert oder gelöscht sieht. Doppelklick zeigt den Patch; ziehen Sie den Balken darüber, um dieser Liste mehr oder weniger Platz zu geben."
+    ),
 
     // ---- git status in the file tree -----------------------------------
     DiffTitle("Git changes for {0}", "Git-wijzigingen voor {0}", "Modifications Git pour {0}", "Git-Änderungen für {0}"),

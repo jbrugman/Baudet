@@ -77,4 +77,49 @@ class GitStatusSpec : BehaviorSpec({
             GitStatus.parsePorcelain(" M top.txt")["top.txt"] shouldBe FileChange.Modified
         }
     }
+
+    given("a snapshot read whole, as the change list does") {
+        val status = GitStatus(true, GitStatus.parsePorcelain("?? new.txt\n M README.md\n D src/a.kt"))
+        then("entries hold every path git reported") {
+            status.entries.keys shouldBe setOf("new.txt", "README.md", "src/a.kt")
+        }
+        then("a folder that is not a repository yields no rows") {
+            ChangesList.rows(GitStatus.NOT_A_REPO) shouldBe emptyList<ChangeRow>()
+        }
+    }
+
+    given("the order of the change list") {
+        val status = GitStatus(
+            true,
+            GitStatus.parsePorcelain(" M src/deep/z.kt\n?? src/a.kt\n M README.md\n M src/b.kt\n D AGENTS.md")
+        )
+        then("files of one folder stay together, root files first") {
+            ChangesList.rows(status).map { it.relPath } shouldContainExactly
+                listOf("AGENTS.md", "README.md", "src/a.kt", "src/b.kt", "src/deep/z.kt")
+        }
+        then("porcelain's own order does not leak through") {
+            status.entries.keys.toList().first() shouldBe "src/deep/z.kt"
+        }
+        then("a row knows its folder and its name") {
+            val row = ChangesList.rows(status).first { it.relPath == "src/deep/z.kt" }
+            row.parent shouldBe "src/deep"
+            row.name shouldBe "z.kt"
+        }
+        then("a file at the project root reports an empty folder") {
+            ChangesList.rows(status).first { it.relPath == "README.md" }.parent shouldBe ""
+        }
+    }
+
+    given("the letter in front of a row") {
+        then("it mirrors the porcelain letter, with ? for untracked") {
+            ChangesList.letter(FileChange.Modified) shouldBe 'M'
+            ChangesList.letter(FileChange.Added) shouldBe 'A'
+            ChangesList.letter(FileChange.Deleted) shouldBe 'D'
+            ChangesList.letter(FileChange.Renamed) shouldBe 'R'
+            ChangesList.letter(FileChange.Untracked) shouldBe '?'
+        }
+        then("a tracked change no letter names falls to ~") {
+            ChangesList.letter(FileChange.Other) shouldBe '~'
+        }
+    }
 })

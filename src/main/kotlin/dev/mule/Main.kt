@@ -94,7 +94,8 @@ fun main(args: Array<String>) {
                 state.updateWindowGeometry(
                     frame.x, frame.y, frame.width, frame.height,
                     clampedDivider(layout.left, state.config.leftDivider),
-                    clampedDivider(layout.right, state.config.rightDivider)
+                    clampedDivider(layout.right, state.config.rightDivider),
+                    clampedDivider(layout.files.changesSplit, state.config.filesDivider)
                 )
             }
         })
@@ -107,8 +108,12 @@ fun main(args: Array<String>) {
     }
 }
 
-/** The two live split panes, kept so a rebuild can carry their current widths across. */
-private data class MainLayout(val left: JSplitPane, val right: JSplitPane)
+/**
+ * The live split panes plus the file panel, kept so a rebuild can carry their current sizes
+ * across. The file panel rides along for the sake of the bar inside it: the split between the
+ * tree and the change list is the panel's own business, but its height belongs to the layout.
+ */
+private data class MainLayout(val left: JSplitPane, val right: JSplitPane, val files: FileTreePanel)
 
 /** (Re)build every panel in the active language and put it on screen. */
 private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLayout {
@@ -129,7 +134,15 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
 
     // The file tree follows the project of whatever the sidebar selects; declared before the
     // sidebar so the selection callback can point straight at it.
-    val files = FileTreePanel(state).apply { minimumSize = Dimension(0, 0) }
+    val files = FileTreePanel(state).apply {
+        minimumSize = Dimension(0, 0)
+        // The panel already resolved its own height from the stored value; a rebuild carries the
+        // live position over it, exactly as the two window splits do.
+        val chosen = changesSplit.dividerLocation
+        changesSplit.dividerLocation = WindowLayout.resolveDivider(
+            previous?.files?.changesSplit?.dividerLocation, 0, chosen
+        )
+    }
 
     val sidebar = ProjectSidebar(
         state,
@@ -173,7 +186,7 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
-    return MainLayout(left, split)
+    return MainLayout(left, split, files)
 }
 
 /**
@@ -209,13 +222,15 @@ private fun applySavedLocation(frame: JFrame, config: AppConfig) {
 }
 
 /**
- * The width worth saving for one split: its live divider, unless that divider is collapsed
+ * The extent worth saving for one split: its live divider, unless that divider is collapsed
  * or unset -- zero, or at or past the far edge -- in which case the previously stored value
- * is kept so a collapse never becomes the reopened default.
+ * is kept so a collapse never becomes the reopened default. A vertical split runs out of
+ * height rather than width, which is what the change list under the file tree does.
  */
 private fun clampedDivider(split: JSplitPane, stored: Int): Int {
+    val extent = if (split.orientation == JSplitPane.VERTICAL_SPLIT) split.height else split.width
     val location = split.dividerLocation
-    return if (location <= 0 || location >= split.width) stored else location
+    return if (location <= 0 || location >= extent) stored else location
 }
 
 /**

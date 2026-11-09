@@ -14,12 +14,20 @@ class GitStatus(val isRepository: Boolean, private val byPath: Map<String, FileC
     /** The coarse change for [relativePath], or null when git sees no change there. */
     fun changeOf(relativePath: String): FileChange? = byPath[relativePath]
 
+    /**
+     * Every change git reported, keyed by path relative to the project folder, in the order
+     * porcelain listed them. This is what the change list below the tree reads; [changeOf]
+     * stays the lookup for a single row, since the tree asks per visible file.
+     */
+    val entries: Map<String, FileChange> get() = byPath
+
     /** The names of files git reports deleted directly inside [dirRelative] (empty for the root). */
     fun deletedUnder(dirRelative: String): List<String> =
         byPath.entries
             .filter { it.value == FileChange.Deleted && it.key.substringBeforeLast('/', "") == dirRelative }
             .map { it.key.substringAfterLast('/') }
             .sorted()
+
 
     companion object {
         /** The status to use when the folder is not a repository: nothing ever shows as changed. */
@@ -82,5 +90,53 @@ class GitStatus(val isRepository: Boolean, private val byPath: Map<String, FileC
             }
             return out.toString()
         }
+    }
+}
+
+/**
+ * One row of the change list shown under the file tree: the path as git prints it (relative
+ * to the project folder, slash-separated) and the coarse kind of change.
+ */
+data class ChangeRow(val relPath: String, val change: FileChange) {
+
+    /** The file name alone, without the folders in front of it. */
+    val name: String get() = relPath.substringAfterLast('/')
+
+    /** The folder the file sits in, as git writes it; empty for a file at the project root. */
+    val parent: String get() = relPath.substringBeforeLast('/', "")
+}
+
+/**
+ * Which rows the change list shows, in what order, and with which one-letter mark. Kept free
+ * of Swing so the ordering and the letter mapping are testable on their own, the way
+ * [dev.mule.ui.WindowLayout] keeps the split-pane rule out of the panels.
+ *
+ * The rows are exactly what git reports, which is what makes the list say "what has this
+ * project changed" instead of "what is on disk": a deleted file stays a row although nothing
+ * is there anymore, and an unchanged file never appears although the tree above shows it.
+ */
+object ChangesList {
+
+    /**
+     * Every reported change, ordered so the files of one folder stay together: by folder, then
+     * by name, then by the whole path as a tie-break. Porcelain's own order is not stable enough
+     * to scan, since a staged file or a rename can land anywhere in it.
+     */
+    fun rows(status: GitStatus): List<ChangeRow> =
+        status.entries.map { ChangeRow(it.key, it.value) }
+            .sortedWith(compareBy({ it.parent }, { it.name }, { it.relPath }))
+
+    /**
+     * The letter in front of a row. Deliberately the porcelain letter where one exists, so the
+     * list reads like `git status` in a terminal; `?` for untracked and `~` for [FileChange.Other],
+     * a tracked change none of the letters names.
+     */
+    fun letter(change: FileChange): Char = when (change) {
+        FileChange.Untracked -> '?'
+        FileChange.Added -> 'A'
+        FileChange.Modified -> 'M'
+        FileChange.Deleted -> 'D'
+        FileChange.Renamed -> 'R'
+        FileChange.Other -> '~'
     }
 }

@@ -29,6 +29,11 @@ import javax.swing.text.StyleContext
  * remembered spot that no longer lands on any screen falls back to centering, exactly as the
  * main window does. Added lines read green and removed lines red, so a patch is legible at a
  * glance; the palette is tuned for the dark FlatLaf theme rather than a light editor.
+ *
+ * A file with no patch to show can still carry [plainBody]: the message then stays on top in
+ * the normal color and the file content follows below it in the same muted gray the chat uses
+ * for reasoning. Those lines are never classified as diff lines, so content that happens to
+ * start with a plus or a minus cannot be mistaken for an addition or a removal.
  */
 object DiffViewDialog {
 
@@ -40,6 +45,7 @@ object DiffViewDialog {
         rememberedY: Int,
         rememberedW: Int,
         rememberedH: Int,
+        plainBody: String? = null,
         onClosed: (x: Int, y: Int, width: Int, height: Int) -> Unit
     ) {
         val parent = SwingUtilities.getWindowAncestor(owner)
@@ -52,7 +58,7 @@ object DiffViewDialog {
             isEditable = false
             margin = Insets(8, 8, 8, 8)
         }
-        renderDiff(pane, text)
+        renderDiff(pane, text, plainBody)
         dialog.contentPane.add(JScrollPane(pane).apply {
             preferredSize = Dimension(
                 WindowLayout.resolveDialogSize(rememberedW, DEFAULT_WIDTH),
@@ -75,26 +81,43 @@ object DiffViewDialog {
     }
 
     /**
-     * Fill [pane] with [text] line by line, coloring each line by its diff kind. The text is
-     * inserted straight into the styled document instead of through setText, because the viewer
-     * shows raw patch text that can contain braces and backslashes, which a rich-text reader
-     * would otherwise try to interpret. A trailing empty line is preserved, since splitting on
-     * a newline keeps it and rejoining with the same separator is lossless.
+     * Fill [pane] with [text] line by line, coloring each line by its diff kind, then [plainBody]
+     * beneath it in gray when given. The text is inserted straight into the styled document
+     * instead of through setText, because the viewer shows raw patch text that can contain braces
+     * and backslashes, which a rich-text reader would otherwise try to interpret. A trailing empty
+     * line is preserved, since splitting on a newline keeps it and rejoining with the same
+     * separator is lossless.
      */
-    private fun renderDiff(pane: JTextPane, text: String) {
+    private fun renderDiff(pane: JTextPane, text: String, plainBody: String?) {
         val context = StyleContext()
         val base = context.addStyle("base", null).apply {
             StyleConstants.setFontFamily(this, Font.MONOSPACED)
             StyleConstants.setFontSize(this, 12)
         }
         val styles = DiffLineKind.entries.associateWith { kind -> styleFor(context, base, kind) }
+        val plainStyle = context.addStyle("plain", base).apply {
+            StyleConstants.setForeground(this, COLOR_PLAIN)
+        }
         val doc = pane.styledDocument
-        val lines = text.split("\n")
-        lines.forEachIndexed { index, line ->
-            doc.insertString(doc.length, line, styles.getValue(DiffHighlight.classify(line)))
-            if (index < lines.lastIndex) doc.insertString(doc.length, "\n", base)
+        insertLines(doc, text.split("\n"), base) { styles.getValue(DiffHighlight.classify(it)) }
+        if (plainBody != null) {
+            doc.insertString(doc.length, "\n\n", base)
+            insertLines(doc, plainBody.split("\n"), base) { plainStyle }
         }
         pane.caretPosition = 0
+    }
+
+    /** Write [lines] to [doc], each under the style [styleOf] picks, separated by newlines. */
+    private fun insertLines(
+        doc: javax.swing.text.StyledDocument,
+        lines: List<String>,
+        base: Style,
+        styleOf: (String) -> Style
+    ) {
+        lines.forEachIndexed { index, line ->
+            doc.insertString(doc.length, line, styleOf(line))
+            if (index < lines.lastIndex) doc.insertString(doc.length, "\n", base)
+        }
     }
 
     /** The style for one kind, inheriting the monospaced base; context keeps the default color. */
@@ -143,6 +166,8 @@ object DiffViewDialog {
     private val COLOR_FILE_HEADER = Color(0xE6, 0xED, 0xF3)
     private val COLOR_HUNK_HEADER = Color(0x79, 0xC0, 0xFF)
     private val COLOR_META = Color(0x8B, 0x94, 0x9E)
+    /** The gray of an aside: the same tone the chat renders reasoning in, so both read alike. */
+    private val COLOR_PLAIN = Color(150, 150, 150)
 
     private const val DEFAULT_WIDTH = 560
     private const val DEFAULT_HEIGHT = 360
