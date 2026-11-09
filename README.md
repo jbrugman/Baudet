@@ -43,9 +43,10 @@ concrete behavior:
 
 ## Current state: alpha
 
-The wire layer and the file tools work; the editor surface around them is still
-thin. The model can now read a project file and apply a patch to one, which is
-what tips Mule from a chat client toward a coding assistant.
+The wire layer and the project tools work; the editor surface around them is still
+thin. The model can read a project file, apply a patch to one, query git read-only,
+and run a shell command it first has to ask you to approve — which is what tips Mule
+from a chat client toward a coding assistant.
 
 Working:
 
@@ -57,15 +58,20 @@ Working:
 - client-side compaction
 - UI text in English, Dutch, French or German, switchable at runtime (English is the default)
 - projects in a left sidebar, with conversations grouped under them and
-  per-folder read/write/execute grants: Read gates the file tree, Write gates the
-  file tools, and Execute is stored but not enforced yet
-- file tools driven by the model — `read_file` and `edit_file` — run in a tool
-  loop, gated on a selected project that has a linked folder granted Write with
-  tools enabled; a folder that cannot be written is reported, never silently skipped
+  per-folder read/write/execute grants: Read gates the file tree and the read-only git
+  tool, Write gates the edit tool, and Execute gates the shell tool
+- tools driven by the model — `read_file`, `edit_file`, `run_command` and a read-only
+  `git` — run in a tool loop, each offered only for the rights the selected project's
+  linked folder grants, with tools enabled; a folder that cannot be written is reported,
+  never silently skipped
+- `run_command` runs bash (and other interpreters) with the project folder as its working
+  directory and the system temp folder as `TMPDIR`; every command needs your approval,
+  even in Auto mode, because once bytes reach a shell the folder boundary is no longer ours
 - a project file tree on the right, following the selected project
 - the file tree colors each file by its git state — green changed, blue untracked,
   red deleted (a ghost row when the file is gone from disk) — and double-clicking a
-  file opens its git patch; git here is read-only, it shows the change, it does not commit
+  file opens its git patch, colored so added lines read green and removed lines red;
+  git here is read-only, it shows the change, it does not commit
 
 Not there yet:
 
