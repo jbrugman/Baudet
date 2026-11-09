@@ -45,13 +45,10 @@ object AboutDialog {
             background = Color(0x2b, 0x2b, 0x2b)
             caret = null
             margin = java.awt.Insets(8, 8, 8, 8)
-            // Set the text before the caret position: assigning the position while the document
-            // is empty would be reset by the load anyway, so scroll-to-top goes last.
             text = MarkdownHtml.toHtml(Texts[Key.AboutBody])
             addHyperlinkListener { e ->
                 if (e.eventType == HyperlinkEvent.EventType.ACTIVATED) browse(e.description)
             }
-            caretPosition = 0
         }
         val scroll = JScrollPane(body).apply {
             preferredSize = Dimension(560, 520)
