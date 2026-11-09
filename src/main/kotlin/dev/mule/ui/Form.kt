@@ -19,7 +19,12 @@ fun formPanel(rows: List<Pair<String, JComponent>>, gap: Int = 6): JPanel {
         c.gridy = i
         c.weightx = 0.0
         c.fill = GridBagConstraints.NONE
-        p.add(JLabel(label), c)
+        val caption = JLabel(label)
+        // The hint belongs to the row rather than to the control alone: the reader
+        // hovers the caption, so mirror whatever tip the field carries onto it. A
+        // blank caption stays bare, because its control already owns the target.
+        if (label.isNotBlank() && !field.toolTipText.isNullOrBlank()) caption.toolTipText = field.toolTipText
+        p.add(caption, c)
         c.gridx = 1
         c.weightx = 1.0
         c.fill = GridBagConstraints.HORIZONTAL

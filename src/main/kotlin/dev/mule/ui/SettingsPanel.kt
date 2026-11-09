@@ -53,6 +53,21 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     init {
         language.toolTipText = Texts[Key.TipLanguage]
         toolMode.toolTipText = Texts[Key.TipToolMode]
+        baseUrl.toolTipText = Texts[Key.TipBaseUrl]
+        apiKey.toolTipText = Texts[Key.TipApiKey]
+        envVar.toolTipText = Texts[Key.TipEnvVar]
+        model.toolTipText = Texts[Key.TipModel]
+        maxTokens.toolTipText = Texts[Key.TipMaxTokens]
+        contextBudget.toolTipText = Texts[Key.TipContextBudget]
+        temperature.toolTipText = Texts[Key.TipTemperature]
+        topP.toolTipText = Texts[Key.TipTopP]
+        reasoning.toolTipText = Texts[Key.TipReasoning]
+        systemPrompt.toolTipText = Texts[Key.TipSystemPrompt]
+        useResponses.toolTipText = Texts[Key.TipUseResponses]
+        storeResp.toolTipText = Texts[Key.TipStoreResponses]
+        useServerSession.toolTipText = Texts[Key.TipSendResponseId]
+        autoApproveSafe.toolTipText = Texts[Key.TipAutoApproveSafe]
+        maxIterations.toolTipText = Texts[Key.TipMaxIterations]
         val form = formPanel(
             listOf(
                 Texts[Key.LanguageLabel] to language,

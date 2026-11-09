@@ -3,6 +3,7 @@ package dev.mule.ui
 import dev.mule.app.AppState
 import dev.mule.fs.FileEntry
 import dev.mule.fs.FileLister
+import dev.mule.fs.FileWatcher
 import dev.mule.git.ChangeRow
 import dev.mule.git.ChangesList
 import dev.mule.git.FileChange
@@ -40,6 +41,8 @@ import javax.swing.JSplitPane
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.event.TreeExpansionEvent
+import javax.swing.event.AncestorEvent
+import javax.swing.event.AncestorListener
 import javax.swing.event.TreeExpansionListener
 import javax.swing.JTree
 import javax.swing.tree.DefaultMutableTreeNode
@@ -73,6 +76,9 @@ import javax.swing.tree.TreePath
 class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private val git = GitInspector()
+
+    /** Watches the linked folder so the tree and change list refresh themselves when it changes on disk. */
+    private val watcher = FileWatcher()
 
     /** The current change snapshot; refreshed on load and on Refresh. */
     private var gitStatus: GitStatus = GitStatus.NOT_A_REPO
@@ -184,6 +190,15 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
             }
         })
 
+        // A language change rebuilds every panel and drops this one with it. Stopping the watcher the
+        // moment the panel leaves the window keeps a discarded panel from watching its old folder
+        // forever on an orphan thread.
+        addAncestorListener(object : AncestorListener {
+            override fun ancestorAdded(event: AncestorEvent) {}
+            override fun ancestorRemoved(event: AncestorEvent) = watcher.stop()
+            override fun ancestorMoved(event: AncestorEvent) {}
+        })
+
         // Start empty and on the message card: a bare JTree ships a sample model (the
         // "colors / sports / food" nodes), which must never flash, and no project is
         // selected until the sidebar reports one.
@@ -203,6 +218,7 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     private fun showMessage(text: String) {
+        watcher.stop()
         rootPath = null
         gitStatus = GitStatus.NOT_A_REPO
         changeRows.clear()
@@ -220,16 +236,26 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         hiddenBox.isEnabled = true
         rebuild()
         (cards.layout as CardLayout).show(cards, CARD_TREE)
+        // Keep the panel honest about the folder without waiting for a click: refresh on a disk change,
+        // but only while this folder is still the one on screen (a switch or a clear cancels that).
+        watcher.start(path) { SwingUtilities.invokeLater { if (rootPath == path) rebuild() } }
     }
 
     /** Rebuild both halves: re-read git status, then the first tree level and the change list. */
     private fun rebuild() {
         val path = rootPath ?: return
+        // A refresh re-reads everything, so remember what the user had open and selected first; the
+        // new model is then re-expanded to match, which keeps both Refresh and the folder watcher
+        // from collapsing a tree the user is in the middle of reading.
+        val keepExpanded = expandedDirs()
+        val keepSelected = selectedPath()
         gitStatus = git.status(path)
         val root = makeDirNode(rootName, path)
         tree.model = DefaultTreeModel(root)
         loadChildren(root, path)
         tree.expandRow(0)
+        keepExpanded.forEach { found -> pathToNode(found)?.let { node -> tree.expandPath(TreePath(node.path)) } }
+        keepSelected?.let { found -> pathToNode(found)?.let { node -> tree.selectionPath = TreePath(node.path) } }
         rebuildChanges()
     }
 
@@ -293,6 +319,53 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         node.childCount == 1 && (node.getChildAt(0) as? DefaultMutableTreeNode)?.userObject?.let {
             (it as? FileNode)?.path == null
         } == true
+
+    // ---- expansion memory --------------------------------------------------
+
+    /** The on-disk path of every directory the user has open now, root excluded. */
+    private fun expandedDirs(): List<Path> {
+        val model = tree.model as? DefaultTreeModel ?: return emptyList()
+        val start = TreePath(arrayOf<Any?>(model.root))
+        val out = ArrayList<Path>()
+        tree.getExpandedDescendants(start)?.asSequence()?.forEach { tp ->
+            val file = (tp.lastPathComponent as? DefaultMutableTreeNode)?.userObject as? FileNode
+            if (file != null && file.isDirectory && file.path != null) out.add(file.path)
+        }
+        return out
+    }
+
+    /** The on-disk path of the selected row, or null when nothing usable is selected. */
+    private fun selectedPath(): Path? {
+        val node = tree.selectionPath?.lastPathComponent as? DefaultMutableTreeNode ?: return null
+        return (node.userObject as? FileNode)?.path
+    }
+
+    /**
+     * The node for [abs] in the current model, loading each unloaded level on the way down so a folder
+     * the user had open but never expanded can still be reached. Null when that folder is gone now.
+     */
+    private fun pathToNode(abs: Path): DefaultMutableTreeNode? {
+        val root = rootPath ?: return null
+        val model = tree.model as? DefaultTreeModel ?: return null
+        var node = model.root as? DefaultMutableTreeNode ?: return null
+        val rel = root.relativize(abs)
+        for (i in 0 until rel.nameCount) {
+            val nodeFile = (node.userObject as? FileNode) ?: return null
+            val nodeDir = nodeFile.path ?: return null
+            if (isUnloaded(node)) loadChildren(node, nodeDir)
+            node = childByName(node, rel.getName(i).toString()) ?: return null
+        }
+        return node
+    }
+
+    /** The child whose name matches, or null; names are unique within a directory, so this settles it. */
+    private fun childByName(node: DefaultMutableTreeNode, name: String): DefaultMutableTreeNode? {
+        for (i in 0 until node.childCount) {
+            val child = node.getChildAt(i) as? DefaultMutableTreeNode ?: continue
+            if ((child.userObject as? FileNode)?.name == name) return child
+        }
+        return null
+    }
 
     // ---- git helpers -------------------------------------------------------
 

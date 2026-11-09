@@ -79,14 +79,13 @@ Working:
   red deleted (a ghost row when the file is gone from disk) — and double-clicking a
   file opens its git patch, colored so added lines read green and removed lines red;
   git here is read-only, it shows the change, it does not commit
+- the file tree watches its folder and refreshes itself when files change on disk, keeping the folders you had open and your selection in place, so the colors and the change list stay current while a model writes; the Refresh button still forces a full re-read
 
 Not there yet:
 
 - no in-app editor and no markdown rendering: edits happen through the model, not
   a text buffer
 - git is read-only inspection — no commit, no checkpoints
-- the file tree refreshes its git status on load and on Refresh, not automatically
-  after every turn
 - the GraalVM `native-image` profile is not wired up
 
 ## Stack
