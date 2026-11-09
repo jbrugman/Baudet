@@ -130,10 +130,13 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     private fun collect(): AppConfig? {
+        // Zero is a real choice, not a missing one: a max-output of 0 omits the field so the
+        // server decides, and a budget of 0 turns the context guard off. Only a non-number or a
+        // negative is rejected, which is exactly what the error text already promises.
         val mt = maxTokens.text.trim().toIntOrNull()
-        if (mt == null || mt <= 0) { fail(Texts[Key.ErrMaxTokens]); return null }
+        if (mt == null || mt < 0) { fail(Texts[Key.ErrMaxTokens]); return null }
         val cb = contextBudget.text.trim().toIntOrNull()
-        if (cb == null || cb <= 0) { fail(Texts[Key.ErrContextBudget]); return null }
+        if (cb == null || cb < 0) { fail(Texts[Key.ErrContextBudget]); return null }
         val temp = temperature.text.trim().toDoubleOrNull()
         if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.ErrTemperature]); return null }
         val tp = topP.text.trim()
