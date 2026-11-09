@@ -18,6 +18,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
 
     // ---- shared ------------------------------------------------------------
     SendButton("Send  (ctrl+enter)", "Verzenden  (ctrl+enter)", "Envoyer  (ctrl+entrée)", "Senden  (Strg+Eingabe)"),
+    SteerButton("Steer  (ctrl+enter)", "Bijsturen  (ctrl+enter)", "Relancer  (ctrl+entrée)", "Nachsteuern  (Strg+Eingabe)"),
     NewSessionButton("New session", "Nieuwe sessie", "Nouvelle session", "Neue Sitzung"),
     CompactButton("Compact", "Compacten", "Compresser", "Kompaktieren"),
     StopButton("Stop", "Stop", "Arrêter", "Stopp"),
@@ -43,6 +44,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "kies eerst een model bij Modellen of in Instellingen", "choisissez d'abord un modèle, sous Modèles ou dans Paramètres", "wählen Sie zuerst ein Modell, unter Modelle oder in Einstellungen"
     ),
     Streaming("streaming...", "streamen...", "flux en cours...", "streamt..."),
+    SteerQueued("steering...", "bijsturen...", "relance...", "nachsteuern..."),
     LastEvent("last={0}", "eind={0}", "dernier={0}", "letztes={0}"),
     Truncated("TRUNCATED ({0})", "AFGEBROKEN ({0})", "TRONQUÉ ({0})", "ABGESCHNITTEN ({0})"),
     TruncatedUnknown("TRUNCATED (no reason reported)", "AFGEBROKEN (reden niet gemeld)", "TRONQUÉ (aucune raison signalée)", "ABGESCHNITTEN (kein Grund gemeldet)"),

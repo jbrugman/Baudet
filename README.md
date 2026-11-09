@@ -82,6 +82,12 @@ Working:
 
 - list models, pick one, save settings
 - streaming chat over `/v1/responses` with a server-side session
+- **Stop** ends a running turn for real: it closes the stream still open on the backend, so a read
+  blocked waiting for the next event releases at once, and it keeps whatever already streamed
+  instead of saving a half answer
+- **Steer**: type and send while a turn is still running, and your new instruction is not lost -- the
+  partial answer stays, that turn is cut, and the instruction goes out as the next message the moment
+  the cut lands, with no second press and no manual stop first
 - reasoning never enters the transcript: it fills a closable dock above the input, as tall as
   the input itself, opens on its own the first time a turn thinks out loud, and stays closed for
   the rest of that turn when you close it; it is display-only and never sent back to the model
@@ -94,6 +100,12 @@ Working:
 - context-budget enforcement: a turn that would not fit is folded away automatically (or
   refused if even that cannot make room), and a tool loop stops before firing a request the
   backend would reject for being too long, rather than burning a turn on a doomed call
+- context strategy, chosen in Settings, decides what history leaves the app: **Keep last** (the
+  default) sends the system prompt plus the last N messages, N adjustable and 15 by default, a
+  Storyteller-style rolling window that never drops the system prompt; **Rolling window** fills as
+  much of the window as it can, oldest messages rolling off first, again with the system prompt always
+  leading; **Stop at limit** sends the transcript whole and refuses a turn that would not fit rather
+  than dropping context
 - UI text in English, Dutch, French or German, switchable at runtime (English is the default)
 - projects in a left sidebar, with conversations grouped under them and
   per-folder read/write/execute grants: Read gates the file tree and the read-only git

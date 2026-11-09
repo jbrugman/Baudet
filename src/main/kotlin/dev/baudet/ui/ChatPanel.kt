@@ -180,6 +180,12 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     /** Set by [stop] so the catch path reports a stopped turn rather than a failure. */
     @Volatile private var cancelled = false
 
+    /**
+     * An instruction typed while a turn streams, held until the cut turn has stopped, then sent as
+     * the next message. Touched only on the EDT, so it needs no volatile; null means nothing queued.
+     */
+    private var steerPending: String? = null
+
     /** Fired when the list of conversations may have changed, so the sidebar can re-render. */
     var onSessionsChanged: () -> Unit = {}
 
@@ -366,7 +372,10 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private fun setBusy(b: Boolean) {
         busy = b
-        sendButton.isEnabled = !b
+        // During a turn the primary button stays live but reads Steer rather than greying out:
+        // pressing it folds a new instruction into the running turn instead of losing the keystroke.
+        sendButton.isEnabled = true
+        sendButton.text = if (b) Texts[Key.SteerButton] else Texts[Key.SendButton]
         stopButton.isEnabled = b
         newSessionButton.isEnabled = !b
         status.foreground = if (b) Color(160, 160, 160) else Color(120, 200, 130)
@@ -386,6 +395,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun stop() {
         if (!busy) return
         cancelled = true
+        steerPending = null
         state.cancelTurn()
         worker?.interrupt()
     }
@@ -397,6 +407,14 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.foreground = Color(224, 178, 74)
         status.text = Texts[Key.TurnStopped]
         setBusy(false)
+        // A steer queued a follow-up before cutting this turn. The stopped turn has already
+        // released the lock -- AppState.send clears it before this callback runs -- so it is safe
+        // to start the next message here; the partial answer above stays in the transcript.
+        val queued = steerPending
+        if (queued != null) {
+            steerPending = null
+            sendNow(queued)
+        }
     }
 
     /**
@@ -410,14 +428,44 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         setBusy(false)
     }
 
+    /**
+     * Handle a send from the button or the keyboard. Idle, it starts a turn as before; during a
+     * running turn it steers rather than being ignored, so an instruction typed mid answer is never
+     * dropped and never needs a second press. An empty box does nothing either way.
+     */
     private fun send() {
-        if (busy) return
         val text = input.text.trim()
         if (text.isEmpty()) return
+        if (busy) {
+            steer(text)
+            return
+        }
         if (state.config.model.isBlank()) {
             fail(Texts[Key.PickModelFirst])
             return
         }
+        sendNow(text)
+    }
+
+    /**
+     * Fold a new instruction into the turn in flight without making the user stop and send by hand.
+     * It keeps the answer streamed so far, cuts that turn through the same path as Stop, and queues
+     * this text to go out as the next message the moment the stopped turn releases the lock -- see
+     * [stoppedTurn]. The follow-up belongs to the same conversation, so the model sees the partial
+     * answer it already produced before it is redirected.
+     */
+    private fun steer(text: String) {
+        steerPending = text
+        input.text = ""
+        status.foreground = Color(160, 160, 160)
+        status.text = Texts[Key.SteerQueued]
+        cancelled = true
+        state.cancelTurn()
+        worker?.interrupt()
+    }
+
+    /** Run one turn: echo the prompt, then ask the backend on a worker thread. */
+    private fun sendNow(text: String) {
         beginTurn(text)
 
         // A fresh renderer per turn scopes both the markdown stream and the dock to one
@@ -441,7 +489,9 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 if (cancelled || e is InterruptedException) SwingUtilities.invokeLater { stoppedTurn() }
                 else SwingUtilities.invokeLater { turnFailed(e) }
             } finally {
-                worker = null
+                // Only this thread may clear the reference. A steer can launch a newer worker before
+                // this one unwinds, and clearing it here would orphan the turn that is really running.
+                if (worker === Thread.currentThread()) worker = null
             }
         }
         worker = t

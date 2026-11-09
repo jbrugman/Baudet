@@ -59,4 +59,27 @@ class AppStateTurnGuardSpec : BehaviorSpec({
             }
         }
     }
+
+    given("no turn in flight") {
+        val state = freshState()
+        state.newSession()
+        `when`("a stop is pressed with nothing to cut") {
+            then("it is a safe no-op and the lock stays idle") {
+                runCatching { state.cancelTurn() }.isSuccess shouldBe true
+                state.turning shouldBe false
+            }
+        }
+    }
+
+    given("a turn claimed before its socket was opened") {
+        val state = freshState()
+        state.newSession()
+        state.turning = true
+        `when`("a stop lands before any request began streaming") {
+            then("stopping never throws and never wedges the lock") {
+                runCatching { state.cancelTurn() }.isSuccess shouldBe true
+                state.turning shouldBe true
+            }
+        }
+    }
 })
