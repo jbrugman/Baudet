@@ -10,6 +10,8 @@ import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ActionEvent
@@ -35,12 +37,21 @@ import javax.swing.border.EmptyBorder
  * are the two numbers that reveal whether the server-side session and the
  * prefix cache are actually working.
  *
- * Reasoning is rendered but never stored: it is display-only and disappears on
- * the next redraw, which keeps it out of the context sent back to the model.
+ * Reasoning never enters the transcript. It fills a closable dock above the input instead, so a
+ * thinking model can be as verbose as it likes without pushing the conversation away, and it is
+ * still never stored: the dock is display-only and empties on the next redraw, which keeps it
+ * out of the context sent back to the model.
  */
 class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
-    companion object { private const val SEND_COMMAND = "mule-send" }
+    companion object {
+        private const val SEND_COMMAND = "mule-send"
+
+        /** How far above the bottom still counts as resting at the tail, in pixels. */
+        private const val TAIL_SLACK = 24
+        private const val COLLAPSE_ARROW = "\u25be"
+        private const val EXPAND_ARROW = "\u25b8"
+    }
 
     private val doc = DefaultStyledDocument()
     private val pane = JTextPane(doc).apply {
@@ -82,6 +93,81 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         StyleConstants.setItalic(this, true)
     }
 
+    /**
+     * The dock above the input. Reasoning used to be written into the transcript, where a
+     * thinking model could push the conversation off screen; here it keeps its own rows and
+     * its own aside style, and it is still never stored.
+     */
+    private val thinkingDoc = DefaultStyledDocument()
+    private val thinking = JTextPane(thinkingDoc).apply {
+        isEditable = false
+        font = Font(Font.MONOSPACED, Font.PLAIN, 13)
+        margin = Insets(8, 8, 8, 8)
+    }
+    private val thinkingScroll = JScrollPane(thinking).apply { minimumSize = Dimension(0, 0) }
+    private val thinkingToggle = JButton(COLLAPSE_ARROW).apply {
+        toolTipText = Texts[Key.TipThinkingToggle]
+        addActionListener { collapse(!thinkingCollapsed) }
+    }
+    private val thinkingHeader = JPanel(BorderLayout()).apply {
+        isVisible = false
+        add(JLabel(Texts[Key.ReasoningLabel]).apply {
+            foreground = Color(150, 150, 150)
+            font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+            border = EmptyBorder(2, 8, 2, 8)
+        }, BorderLayout.WEST)
+        add(thinkingToggle, BorderLayout.EAST)
+    }
+    /**
+     * Holds the dock above the input. A grid-bag lets each row keep its own height, so a
+     * long reasoning block scrolls inside the dock instead of inflating it and pushing the
+     * transcript up, which a layout that splits rows equally could not avoid.
+     */
+    private val stack = JPanel(GridBagLayout())
+
+    /** Full width at the child's own preferred height, so the two rows never share a height. */
+    private fun rowConstraints() = GridBagConstraints().apply {
+        gridx = 0
+        gridwidth = 1
+        gridheight = 1
+        fill = GridBagConstraints.HORIZONTAL
+        weightx = 1.0
+        weighty = 0.0
+        anchor = GridBagConstraints.NORTHWEST
+    }
+
+    /** The renderer of the live turn, so that completion and failure can both flush its tail. */
+    private var lastRender: TurnRender? = null
+    private var thinkingCollapsed = false
+    private var hasThinking = false
+
+    private val bold = SimpleAttributeSet(normal).apply { StyleConstants.setBold(this, true) }
+    private val italic = SimpleAttributeSet(normal).apply { StyleConstants.setItalic(this, true) }
+    private val heading = SimpleAttributeSet(bold).apply { StyleConstants.setFontSize(this, 15) }
+    /**
+     * Inline code is the one run that needs a background to read as code, since every glyph in
+     * this transcript is already monospaced. A fenced block only tints its lines: a background
+     * on a whole line would paint one bar per line, and those bars end wherever the code does.
+     */
+    private val codeSpan = SimpleAttributeSet(normal).apply {
+        StyleConstants.setBackground(this, Color(45, 45, 48))
+        StyleConstants.setForeground(this, Color(206, 206, 211))
+    }
+    private val codeBlock = SimpleAttributeSet(normal).apply {
+        StyleConstants.setForeground(this, Color(196, 207, 224))
+    }
+
+    /** The parser names an intent; this is where that intent becomes a Swing attribute. */
+    private fun attrsFor(kind: SpanKind) = when (kind) {
+        SpanKind.Plain -> normal
+        SpanKind.Bold -> bold
+        SpanKind.Italic -> italic
+        SpanKind.Heading -> heading
+        SpanKind.Code -> codeSpan
+        SpanKind.CodeBlock -> codeBlock
+        SpanKind.Marker -> dim
+    }
+
     private var busy = false
 
     /** Fired when the list of conversations may have changed, so the sidebar can re-render. */
@@ -98,9 +184,21 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // wrap, and the scroll/status fields drop their default (== preferred) minimum,
         // so a narrow chat no longer holds the divider hostage.
         val inputScroll = JScrollPane(input).apply { minimumSize = Dimension(0, 0) }
+        stack.add(inputScroll, rowConstraints())
+        // The dock reads at the input's own height and scrolls beyond it, so reasoning can
+        // grow only inside its viewport. A JTextArea sized by rows reports its preferred
+        // height before the frame is shown, so this tie is available right here at build time.
+        val dockHeight = inputScroll.preferredSize.height.coerceAtLeast(40)
+        thinkingScroll.preferredSize = Dimension(0, dockHeight)
+        thinkingScroll.maximumSize = Dimension(Int.MAX_VALUE, dockHeight)
         val south = JPanel(BorderLayout())
-        south.add(buttons, BorderLayout.NORTH)
-        south.add(inputScroll, BorderLayout.CENTER)
+        // The header sits under the toolbar and the dock straight above the input, so closing
+        // the dock hands its rows back to the input without moving anything else around.
+        val above = JPanel(BorderLayout())
+        above.add(buttons, BorderLayout.NORTH)
+        above.add(thinkingHeader, BorderLayout.SOUTH)
+        south.add(above, BorderLayout.NORTH)
+        south.add(stack, BorderLayout.CENTER)
         val bottom = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
         status.alignmentX = LEFT_ALIGNMENT
         bottom.add(toolWarning)
@@ -128,9 +226,55 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         pane.caretPosition = doc.length
     }
 
+    /**
+     * Drop the previous aside and let a closed dock open again: called when a turn starts and
+     * when the transcript is rebuilt, which are the two moments the old reasoning stops being
+     * worth reading.
+     */
+    private fun resetThinking() {
+        thinkingCollapsed = false
+        hasThinking = false
+        thinkingToggle.text = COLLAPSE_ARROW
+        thinkingDoc.remove(0, thinkingDoc.length)
+        applyDock()
+    }
+
+    private fun collapse(collapsed: Boolean) {
+        thinkingCollapsed = collapsed
+        thinkingToggle.text = if (collapsed) EXPAND_ARROW else COLLAPSE_ARROW
+        applyDock()
+    }
+
+    /**
+     * Adding and removing beats hiding: an invisible child still reserves its slot, so a hidden
+     * dock would leave a gap exactly where the reasoning used to read.
+     */
+    private fun applyDock() {
+        thinkingHeader.isVisible = hasThinking
+        val wanted = ThinkingLayout.dockWanted(hasThinking, thinkingCollapsed)
+        if (wanted && thinkingScroll.parent == null) stack.add(thinkingScroll, rowConstraints(), 0)
+        if (!wanted && thinkingScroll.parent != null) stack.remove(thinkingScroll)
+        stack.revalidate()
+        stack.repaint()
+    }
+
+    /**
+     * Fill the dock, following the tail only when the reader was already resting at it. The
+     * bounds come from the scroll bar model, which owns all three of them: a bar queried field
+     * by field mixes the visible amount with the model and drifts after a resize.
+     */
+    private fun appendThinking(chunk: String) {
+        val bar = thinkingScroll.verticalScrollBar
+        val model = bar.model
+        val atTail = ThinkingLayout.followsTail(model.value, model.extent, model.maximum, TAIL_SLACK)
+        thinkingDoc.insertString(thinkingDoc.length, chunk, reasoningStyle)
+        if (atTail) bar.value = bar.maximum
+    }
+
     /** Full redraw from the session state. Reasoning is gone by design: not stored. */
     fun refresh() {
         doc.remove(0, doc.length)
+        resetThinking()
         val s = state.session
         s.summary?.let { append(Texts.fmt(Key.SummaryBanner, it.length) + "\n\n", dim) }
         s.messages.forEach { m ->
@@ -227,9 +371,10 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         }
         beginTurn(text)
 
-        // A fresh renderer per turn keeps the reasoning/answer labeling scoped to
-        // this one stream; callbacks fire on the worker thread, completion on the EDT.
+        // A fresh renderer per turn scopes both the markdown stream and the dock to one
+        // answer; callbacks fire on the worker thread, completion on the EDT.
         val render = TurnRender()
+        lastRender = render
         Thread {
             try {
                 // Compaction is a model call, so it runs here rather than on the EDT: a
@@ -251,6 +396,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     /** Take the busy lock and echo the prompt into the transcript before the reply. */
     private fun beginTurn(text: String) {
         input.text = ""
+        resetThinking()
         setBusy(true)
         status.text = Texts[Key.Streaming]
         append(Texts[Key.YouLabel], dim)
@@ -264,6 +410,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * nothing at all, which without this marker reads exactly like a good reply.
      */
     private fun finishTurn(turn: Turn) {
+        lastRender?.flush()
         append("\n\n")
         val counts = "id=${turn.responseId ?: Texts[Key.None]} · " +
             "prompt=${turn.usage?.prompt} · completion=${turn.usage?.completion} · " +
@@ -295,6 +442,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * an oversized conversation too.
      */
     private fun turnFailed(e: Exception) {
+        lastRender?.flush()
         append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
         if (e is BackendException && e.contextOverflow) {
             append(Texts[Key.ContextOverflow] + "\n\n", error)
@@ -306,29 +454,31 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Turns the two response streams into transcript writes. Reasoning streams
-     * ahead of the answer on this backend; both callbacks fire on the one worker
-     * thread and invokeLater preserves submission order, so the first chunk of each
-     * kind is labeled exactly once.
+     * Routes the two response streams. Reasoning streams ahead of the answer on this backend;
+     * both callbacks fire on the one worker thread and invokeLater preserves that order, so the
+     * first chunk of the aside is still the first thing the dock ever shows.
      */
     private inner class TurnRender {
-        private var sawReasoning = false
-        private var labelledAnswer = false
 
-        fun delta(delta: String) = SwingUtilities.invokeLater {
-            if (sawReasoning && !labelledAnswer) {
-                labelledAnswer = true
-                append("\n" + Texts[Key.AnswerLabel] + "\n", dim)
-            }
-            append(delta)
-        }
+        /** Held per turn so that markdown never carries a half-open fence into the next answer. */
+        private val markdown = MarkdownStream { text, kind -> append(text, attrsFor(kind)) }
+
+        fun delta(delta: String) = SwingUtilities.invokeLater { markdown.write(delta) }
+
+        /**
+         * Release the line the stream is still holding. Both turn endings call this on the EDT,
+         * the same thread the writer runs on, so the buffer needs no lock and an answer that
+         * stops without a newline still reaches the screen whole.
+         */
+        fun flush() = markdown.flush()
 
         fun reasoning(chunk: String) = SwingUtilities.invokeLater {
-            if (!sawReasoning) {
-                sawReasoning = true
-                append(Texts[Key.ReasoningLabel] + "\n", dim)
-            }
-            append(chunk, reasoningStyle)
+            hasThinking = true
+            val firstChunk = thinkingDoc.length == 0
+            appendThinking(chunk)
+            // Open on the first chunk of a turn only. A dock closed during this turn stays
+            // closed for its remainder, so closing the dock is never fought over.
+            if (firstChunk) collapse(false) else applyDock()
         }
     }
 
