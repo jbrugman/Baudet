@@ -1,5 +1,6 @@
 package dev.mule.ui
 
+import dev.mule.api.BackendException
 import dev.mule.api.Turn
 import dev.mule.app.AppState
 import dev.mule.app.ToolGate
@@ -205,6 +206,17 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.text = msg
     }
 
+    /**
+     * The pre-send refusal, now raised off the EDT after an auto-compaction that still left the
+     * conversation over budget. The prompt is already echoed (the turn lock is held), so show the
+     * reason inline, surface it in the status, and release the lock. Nothing reached the backend.
+     */
+    private fun overBudget(reason: String) {
+        append("\n" + reason + "\n\n", error)
+        fail(reason)
+        setBusy(false)
+    }
+
     private fun send() {
         if (busy) return
         val text = input.text.trim()
@@ -220,6 +232,14 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val render = TurnRender()
         Thread {
             try {
+                // Compaction is a model call, so it runs here rather than on the EDT: a
+                // conversation that would not fit gets folded away before it is refused. Only
+                // when it still will not fit after that do we tell the user, with nothing sent.
+                state.autoCompactIfNeeded()
+                state.contextGuard()?.let { reason ->
+                    SwingUtilities.invokeLater { overBudget(reason) }
+                    return@Thread
+                }
                 val turn = state.send(text, render::delta, render::reasoning)
                 SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
@@ -252,8 +272,15 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             turn.finalEvent == "response.incomplete"
         if (incomplete) {
             val reason = turn.incompleteReason
-            fail((if (reason != null) Texts.fmt(Key.Truncated, reason)
-            else Texts[Key.TruncatedUnknown]) + " · " + counts)
+            // A loop that stopped at the context ceiling is not a truncation of an answer: it
+            // never fired the doomed request. Point at Compact, the same wording a refused
+            // overflow gets, so the user knows the way out rather than a bare reason token.
+            val label = when {
+                reason == "context_limit" -> Texts[Key.ContextOverflow]
+                reason != null -> Texts.fmt(Key.Truncated, reason)
+                else -> Texts[Key.TruncatedUnknown]
+            }
+            fail(label + " · " + counts)
         } else {
             status.text = counts
         }
@@ -261,10 +288,20 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         onSessionsChanged()
     }
 
-    /** Surface a failed turn on the EDT: the error inline, the cause in the status. */
+    /**
+     * Surface a failed turn on the EDT: the error inline, the cause in the status. A prompt the
+     * model cannot hold gets its own wording, because the backend's JSON names a token count the
+     * user cannot act on: what helps is knowing that Compact is the way out and that it works on
+     * an oversized conversation too.
+     */
     private fun turnFailed(e: Exception) {
         append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
-        fail(Texts[Key.TurnFailed])
+        if (e is BackendException && e.contextOverflow) {
+            append(Texts[Key.ContextOverflow] + "\n\n", error)
+            fail(Texts[Key.ContextOverflow])
+        } else {
+            fail(Texts[Key.TurnFailed])
+        }
         setBusy(false)
     }
 

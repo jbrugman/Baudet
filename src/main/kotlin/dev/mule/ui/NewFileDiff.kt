@@ -1,13 +1,14 @@
 package dev.mule.ui
 
 /**
- * Renders a brand-new, untracked file so the diff viewer can show what is inside it even
- * though git has no committed version to compare against. It reproduces the shape of a git
- * new-file patch: a reference to the null device, an added-file header with the relative
- * name, and every content line prefixed with a plus sign. Anything that is not safe to show
- * -- a missing file, one larger than [MAX_BYTES], one whose bytes are not text, or an empty
- * file -- yields just the caller's intro line, which is the same result the viewer showed
- * before. The function is pure, with no Swing and no disk access, so it can be tested alone.
+ * Renders a file the viewer has no patch for: a brand-new, untracked file, or one git sees as
+ * unchanged. [body] reproduces the shape of a git new-file patch: a reference to the null
+ * device, an added-file header with the relative name, and every content line prefixed with a
+ * plus sign. [plain] hands back the bare text instead, for the case where there is nothing
+ * added or removed to highlight and the file itself is the only thing worth showing. Anything
+ * that is not safe to show -- a missing file, one larger than [MAX_BYTES], one whose bytes are
+ * not text, or an empty file -- yields just the caller's intro line for [body] and null for
+ * [plain]. Both are pure, with no Swing and no disk access, so they can be tested alone.
  */
 object NewFileDiff {
 
@@ -38,5 +39,23 @@ object NewFileDiff {
             shown.lineSequence().forEach { append('+').append(it).append('\n') }
             if (truncated) append("\n(content truncated)\n")
         }.trimEnd()
+    }
+
+    /**
+     * The file text as it stands, for a file with no patch to show, or null when there is
+     * nothing safe to show. Deliberately without diff prefixes: these lines are neither added
+     * nor removed, and a content line that happens to begin with a plus or a minus must not be
+     * colored as if it were.
+     */
+    fun plain(bytes: ByteArray?): String? {
+        if (bytes == null) return null
+        if (bytes.size > MAX_BYTES) return null
+        if (bytes.contains(0.toByte())) return null
+        val text = String(bytes, Charsets.UTF_8)
+        if (text.isEmpty()) return null
+
+        val truncated = text.length > MAX_CHARS
+        val shown = if (truncated) text.substring(0, MAX_CHARS) else text
+        return if (truncated) shown.trimEnd() + "\n\n(content truncated)" else shown
     }
 }

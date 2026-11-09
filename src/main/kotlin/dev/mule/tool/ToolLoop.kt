@@ -1,6 +1,7 @@
 package dev.mule.tool
 
 import dev.mule.session.Msg
+import dev.mule.session.SessionState
 
 /**
  * The driver: model turn, then run, then feed the result back, then turn again, until
@@ -24,7 +25,14 @@ class ToolLoop(
     private val registry: ToolRegistry,
     private val extractor: CallExtractor,
     private val maxIterations: Int,
-    private val chainResponseId: Boolean = false
+    private val chainResponseId: Boolean = false,
+    /**
+     * Hard ceiling on the token estimate of the running transcript, only enforced while chaining a
+     * server session (where the backend replays and grows its own context, which the client cannot
+     * bound by trimming what it sends). 0 disables it. When the estimate passes it, the loop stops
+     * cleanly instead of firing a request the backend is certain to refuse.
+     */
+    private val contextCeiling: Long = 0L
 ) {
 
     private val runner = ToolRunner(registry)
@@ -51,6 +59,14 @@ class ToolLoop(
         var callSteps = 0
 
         repeat(maxIterations.coerceAtLeast(1)) {
+            if (contextCeiling > 0 && chainResponseId &&
+                SessionState.estimateTokensOf(msgs) > contextCeiling
+            ) {
+                return LoopOutcome.CapReached(
+                    prev, steps.toList(), added.toList(), undos.toList(),
+                    incompleteReason = "context_limit"
+                )
+            }
             val turn = turnSource.nextTurn(msgs.toList(), prev, tools, onDelta, onReasoning)
             if (chainResponseId && turn.responseId != null) prev = turn.responseId
             addAssistant(msgs, added, turn)

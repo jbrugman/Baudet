@@ -25,6 +25,7 @@ import dev.mule.tool.ResponsesTurnSource
 import dev.mule.tool.ToolContext
 import dev.mule.tool.ToolLoop
 import dev.mule.tool.ToolRegistry
+import dev.mule.tool.Transcript
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -106,18 +107,19 @@ class AppState(val store: H2Store) {
     }
 
     /**
-     * Persist only the window geometry and the two remembered split widths. Unlike
+     * Persist only the window geometry and the three remembered split widths. Unlike
      * [saveConfig] this never fires [onConfigSaved], so storing layout when the window
      * closes cannot trigger a panel rebuild or a feedback loop.
      */
-    fun updateWindowGeometry(x: Int, y: Int, w: Int, h: Int, left: Int, right: Int) {
+    fun updateWindowGeometry(x: Int, y: Int, w: Int, h: Int, left: Int, right: Int, files: Int) {
         config = config.copy(
             windowX = x,
             windowY = y,
             windowWidth = w,
             windowHeight = h,
             leftDivider = left,
-            rightDivider = right
+            rightDivider = right,
+            filesDivider = files
         )
         store.save(config)
     }
@@ -185,6 +187,18 @@ class AppState(val store: H2Store) {
     fun linkFolder(id: String, path: String?, perms: Int) = store.setFolder(id, path, perms)
     fun setProjectArchived(id: String, archived: Boolean) = store.setArchived(id, archived)
 
+    /**
+     * Pin an exact command to the always-allow list and persist it, so the next identical
+     * command runs without a prompt. Persists with [H2Store.save] alone rather than
+     * [saveConfig]: an allow-list change must not fire [onConfigSaved], which would rebuild
+     * the panels for something the running turn reads from config on its next call anyway.
+     */
+    fun allowCommandAlways(command: String) {
+        if (command in config.autoAllowCommands) return
+        config.autoAllowCommands.add(command)
+        store.save(config)
+    }
+
     /** Delete a project and every conversation inside it; files on disk are never touched. */
     fun deleteProject(id: String) {
         if (turning) return
@@ -206,6 +220,55 @@ class AppState(val store: H2Store) {
 
     /** Rename one conversation; a blank title reverts to the derived first-line title. */
     fun renameSession(id: String, title: String) = store.renameSession(id, title)
+
+    /**
+     * Why this conversation must not go out as it stands, or null when it may. The estimate is
+     * the same one the status line shows, so the number the user sees and the number that stops
+     * the send cannot disagree. This refuses before the request rather than after the backend's
+     * answer: a prompt that is too long never reaches the model, so nothing is billed, nothing
+     * streams into the panel, and the text the user typed stays in the input box. It measures the
+     * conversation rather than the request, because a server-side session replays the stored
+     * turns itself -- that is exactly how a chained session outgrows the window. The reply's own
+     * budget is held back too, so a conversation is refused a little before the bar reads full.
+     */
+    fun contextGuard(): String? {
+        val budget = config.contextBudgetTokens
+        if (budget <= 0) return null
+        // Reserve the reply: the input must leave the model room to answer, so the ceiling on
+        // the conversation is the budget minus the configured output. 0 output asks the server
+        // to decide and reserves nothing here.
+        val reserve = config.maxOutputTokens.coerceAtLeast(0)
+        val used = session.estimateTokens()
+        return if (used + reserve > budget) Texts.fmt(Key.ContextTooLong, used, budget) else null
+    }
+
+    /**
+     * The token estimate a chained tool turn may reach before its next request is doomed. Under a
+     * server session the backend replays and grows its own context, so the client cannot bound the
+     * request by trimming what it sends; the loop watches this ceiling and stops cleanly instead of
+     * firing a call the backend is certain to refuse. It mirrors [contextGuard]: the budget less the
+     * reply it must leave room for, less a fixed allowance for the tool definitions and protocol the
+     * loop prepends. 0 when no budget is configured, which disables the ceiling entirely.
+     */
+    private fun contextCeilingTokens(): Long {
+        val budget = config.contextBudgetTokens
+        if (budget <= 0) return 0L
+        val reserve = config.maxOutputTokens.coerceAtLeast(0) + INPUT_OVERHEAD_TOKENS
+        return (budget - reserve).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS).toLong()
+    }
+
+    /**
+     * Fold the older turns away before a turn that would not fit, so a long conversation keeps going
+     * instead of being refused. It runs off the EDT and acts only when a budget is set and the guard
+     * would actually refuse: a conversation with room to spare is left untouched. The summary it
+     * produces rides into the next request through the system prompt, which is why it need not wait
+     * for the user to press Compact. It reuses [compact], so it claims the turn lock and persists.
+     */
+    fun autoCompactIfNeeded() {
+        if (config.contextBudgetTokens <= 0) return
+        if (contextGuard() == null) return
+        compact(AUTO_COMPACT_KEEP_LAST) {}
+    }
 
     fun serverSessionActive(): Boolean =
         config.useServerSession && session.previousResponseId != null
@@ -272,7 +335,7 @@ class AppState(val store: H2Store) {
         val afterPrompt = s.messages.size
         try {
             val turn = if (toolsActive(s)) runToolTurn(s, onDelta, onReasoning)
-            else runPlainTurn(s, userText, onDelta, onReasoning)
+            else runPlainTurn(s, onDelta, onReasoning)
             persistTo(s)
             return turn
         } catch (e: Exception) {
@@ -297,17 +360,18 @@ class AppState(val store: H2Store) {
     /** The one-shot reply this app had before tools: one Responses call, then done. */
     private fun runPlainTurn(
         s: SessionState,
-        userText: String,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
         val prev = if (config.useServerSession) s.previousResponseId else null
-        // The prompt is already the last stored message; drop it from the replayed history
-        // so the client sends it exactly once, as userText, instead of twice.
+        // The prompt is already the last stored message, so Transcript takes it as the current
+        // input and returns only what precedes it: sent once instead of twice, scrubbed, and cut
+        // to what one call can carry, which is the same bound the tool loop runs under.
+        val (prior, prompt) = Transcript.forCall(s.promptHistory())
         val turn = ResponsesClient(config).turn(
             system = instructionsFor(s),
-            history = s.promptHistory().dropLast(1),
-            userText = userText,
+            history = prior,
+            userText = prompt,
             previousResponseId = prev,
             onDelta = onDelta,
             onReasoning = onReasoning
@@ -340,22 +404,28 @@ class AppState(val store: H2Store) {
             approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
             execGranted = executable,
             approveCommand = approveCommand,
-            readGranted = readGranted
+            readGranted = readGranted,
+            autoAllow = config.autoAllowCommands.toSet(),
+            autoApproveSafe = config.autoApproveSafeCommands
         )
-        // The wire format is model-facing, so it joins the English system prompt only
-        // when tools are live; a plain or tool-less turn never mentions it.
-        val system = instructionsFor(s) + "\n\n" + CallExtractor.PROTOCOL
+        // Build the enabled tools once, then advertise exactly those in the prompt: the registry
+        // and the system prompt must name the same set, or the model is taught to call a tool it
+        // does not have, or kept blind to one it does. The wire format is model-facing, so it joins
+        // the English system prompt only when tools are live; a plain or tool-less turn never sees it.
+        val tools = buildList {
+            add(ReadFileTool())
+            if (writable) add(EditFileTool())
+            if (executable) add(ExecuteTool())
+            if (readGranted) add(GitTool())
+        }
+        val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
         val loop = ToolLoop(
             turnSource = ResponsesTurnSource(ResponsesClient(config), system),
-            registry = ToolRegistry(buildList {
-                add(ReadFileTool())
-                if (writable) add(EditFileTool())
-                if (executable) add(ExecuteTool())
-                if (readGranted) add(GitTool())
-            }),
+            registry = ToolRegistry(tools),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
-            chainResponseId = config.useServerSession && s.previousResponseId != null
+            chainResponseId = config.useServerSession && s.previousResponseId != null,
+            contextCeiling = contextCeilingTokens()
         )
         // The sink appends each assistant message and tool observation as the loop produces
         // them, so a later failure cannot discard a real edit already made on disk.
@@ -378,7 +448,7 @@ class AppState(val store: H2Store) {
                 responseId = outcome.responseId,
                 usage = null,
                 finalEvent = null,
-                incompleteReason = "max_tool_iterations"
+                incompleteReason = outcome.incompleteReason
             )
         }
     }
@@ -419,6 +489,13 @@ class AppState(val store: H2Store) {
     }
 
     companion object {
+        /** Fixed allowance for the tool definitions plus the protocol text a tool turn prepends. */
+        private const val INPUT_OVERHEAD_TOKENS = 2000
+        /** Floor so a small budget still lets the loop make at least one modest request. */
+        private const val MIN_CONTEXT_CEILING_TOKENS = 1024
+        /** Turns kept verbatim after an automatic compaction; the rest folds into the summary. */
+        private const val AUTO_COMPACT_KEEP_LAST = 4
+
         /**
          * The data directory. Defaults to a per-user location that does not depend
          * on the working directory: a packaged macOS app is launched by Finder with

@@ -70,8 +70,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     ApiKeyLabel("api-key", "api-key", "clé d'API", "API-Schlüssel"),
     OrEnvVar("or env-var", "of env-var", "ou variable d'env.", "oder Umgebungsvariable"),
     ModelLabel("model", "model", "modèle", "Modell"),
-    MaxTokensLabel("max output tokens", "max output tokens", "jetons de sortie max", "max. Ausgabetoken"),
-    ContextBudgetLabel("context budget (tokens)", "context-budget (tokens)", "budget de contexte (jetons)", "Kontextbudget (Token)"),
+    MaxTokensLabel("max output tokens (0 = server)", "max output tokens (0 = server)", "jetons de sortie max (0 = serveur)", "max. Ausgabetoken (0 = Server)"),
+    ContextBudgetLabel("context budget (tokens, 0 = off)", "context-budget (tokens, 0 = uit)", "budget de contexte (jetons, 0 = désactivé)", "Kontextbudget (Token, 0 = aus)"),
     TemperatureLabel("temperature", "temperature", "température", "Temperatur"),
     TopPLabel("top_p (blank = do not send)", "top_p (leeg = niet sturen)", "top_p (vide = ne pas envoyer)", "top_p (leer = nicht senden)"),
     ReasoningEffortLabel("reasoning-effort", "reasoning-effort", "effort de raisonnement", "Begründungsaufwand"),
@@ -90,6 +90,43 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Verwerp niet-opgeslagen wijzigingen en vul het formulier opnieuw vanuit de laatst opgeslagen instellingen.", "Ignorez les modifications non enregistrées et rechargez le formulaire depuis les derniers paramètres enregistrés.", "Nicht gespeicherte Änderungen verwerfen und das Formular aus den zuletzt gespeicherten Einstellungen neu ausfüllen."),
     TipLanguage("Interface language; applied when you press Save.",
         "Taal van de interface; toegepast zodra u Opslaan drukt.", "Langue de l'interface ; appliquée lorsque vous enregistrez.", "Sprache der Oberfläche; wird beim Speichern angewendet."),
+    TipMaxTokens(
+        "Upper bound on the tokens the model may generate in one turn. 0 or blank leaves that to the server, which applies the model's own limit.",
+        "Bovengrens voor de tokens die het model in één beurt mag genereren. Bij 0 of leeg bepaalt de server dat, naar de eigen limiet van het model.",
+        "Limite supérieure des jetons que le modèle peut générer en un tour. À 0 ou vide, le serveur décide et applique la propre limite du modèle.",
+        "Obergrenze für die Token, die das Modell in einer Runde erzeugen darf. Bei 0 oder leer entscheidet das Server und wendet die eigene Grenze des Modells an."
+    ),
+    TipContextBudget(
+        "A client-side estimate only: it fills the token bar and the compact warning. Nothing of it is sent to the server, and the real context window is never asked for. 0 or blank hides the budget.",
+        "Alleen een schatting aan de kant van de client: hij vult de tokenbalk en de compactwaarschuwing. Er gaat niets davon naar de server en de echte contextgrootte wordt nooit opgevraagd. Bij 0 of leeg valt het budget weg.",
+        "Une estimation côté client uniquement : elle remplit la barre de jetons et l'avertissement de compression. Rien n'en est envoyé au serveur et la vraie fenêtre de contexte n'est jamais demandée. À 0 ou vide, le budget disparaît.",
+        "Nur eine Schätzung auf Client-Seite: sie füllt die Token-Leiste und die Kompaktwarnung. Nichts davon wird an den Server gesendet, und die echte Kontextgröße wird nie abgefragt. Bei 0 oder leer entfällt das Budget."
+    ),
+    TipBaseUrl("The OpenAI-compatible API endpoint, usually ending in /v1. Point it at your local backend, for example 127.0.0.1:8000.", "De OpenAI-compatibele API, meestal eindigend op /v1. Richt deze op uw lokale backend, bijvoorbeeld 127.0.0.1:8000.", "Le point de terminaison de l'API compatible OpenAI, se terminant généralement par /v1. Pointez-le vers votre backend local, par exemple 127.0.0.1:8000.", "Der Endpunkt der OpenAI-kompatiblen API, normalerweise endend auf /v1. Richten Sie ihn auf Ihr lokales Backend, zum Beispiel 127.0.0.1:8000."),
+    TipApiKey("The bearer token sent with each request. Leave blank to read it from the environment variable named on the next line.", "De bearer-token die bij elk verzoek wordt meegestuurd. Laat leeg om hem uit de omgevingsvariabele op de volgende regel te lezen.", "Le jeton bearer envoyé à chaque requête. Laissez vide pour le lire depuis la variable d'environnement indiquée sur la ligne suivante.", "Das Bearer-Token, das mit jeder Anfrage gesendet wird. Leer lassen, um es aus der Umgebungsvariable in der nächsten Zeile zu lesen."),
+    TipEnvVar("Name of the environment variable to read the api key from, used only when the field above is blank.", "Naam van de omgevingsvariabele waar de api-key wordt uitgelezen, alleen gebruikt wanneer het veld hierboven leeg is.", "Nom de la variable d'environnement d'où lire la clé d'API, utilisée seulement si le champ ci-dessus est vide.", "Name der Umgebungsvariable, aus der der API-Schlüssel gelesen wird, nur verwendet, wenn das Feld darüber leer ist."),
+    TipModel("The model id sent with each request. Pick one from the Models tab, or type an id your backend accepts.", "De model-id die bij elk verzoek wordt verstuurd. Kies er een op het tabblad Modellen, of typ een id die uw backend accepteert.", "L'identifiant du modèle envoyé à chaque requête. Choisissez-en un dans l'onglet Modèles, ou saisissez un identifiant accepté par votre backend.", "Die Modell-ID, die mit jeder Anfrage gesendet wird. Wählen Sie eine im Tab Modelle, oder geben Sie eine ID ein, die Ihr Backend akzeptiert."),
+    TipTemperature("Sampling randomness. Lower is more deterministic, higher is more varied; most coding tasks want a low value.", "De randomheid van de sampling. Lager is deterministischer, hoger is gevarieerder; de meeste codeertaken willen een lage waarde.", "Le caractère aléatoire de l'échantillonnage. Plus bas est plus déterministe, plus haut est plus varié ; la plupart des tâches de code veulent une valeur basse.", "Die Zufälligkeit der Stichprobenziehung. Niedriger ist deterministischer, höher ist variantenreicher; die meisten Codieraufgaben wollen einen niedrigen Wert."),
+    TipTopP("Nucleus sampling cutoff, an alternative to temperature. Leave blank to omit it and let the server decide.", "De nucleus-sampling drempel, een alternatief voor temperature. Laat leeg om hem weg te laten en de server te laten beslissen.", "Le seuil d'échantillonnage par noyau, une alternative à la température. Laissez vide pour l'omettre et laisser le serveur décider.", "Die Kernstichproben-Grenze, eine Alternative zur Temperatur. Leer lassen, um sie wegzulassen und den Server entscheiden zu lassen."),
+    TipReasoning("Asks reasoning-capable backends to spend more effort before answering. Blank sends nothing; only some models honour it.", "Vraagt reasoning-capable backends om meer moeite te doen vóór het antwoord. Leeg stuurt niets; niet alle modellen volgen dat.", "Demande aux backends capables de raisonnement un effort accru avant de répondre. Vide n'envoie rien ; seuls certains modèles l'honorent.", "Bittet reasoning-fähige Backends, vor der Antwort mehr Aufwand zu betreiben. Leer sendet nichts; nur manche Modelle folgen dem."),
+    TipSystemPrompt("Instructions that steer every turn. Leave blank to use the built-in default; anything you type here takes over, and it is always sent in English.", "Instructies die elke beurt sturen. Laat leeg voor de ingebouwde standaard; wat u hier typt neemt over, en gaat altijd in het Engels mee.", "Des instructions qui orientent chaque tour. Laissez vide pour le défaut intégré ; ce que vous saisissez ici prend le relais, et part toujours en anglais.", "Anweisungen, die jede Runde steuern. Leer lassen für die integrierte Vorgabe; was Sie hier eingeben, übernimmt, und geht immer auf Englisch mit."),
+    TipUseResponses("Call the newer Responses endpoint instead of chat completions. Use it when your backend offers it; it carries server-side session state.", "Roep het nieuwere Responses-endpoint aan in plaats van chat completions. Gebruik het als uw backend het biedt; het draagt sessietoestand aan de serverzijde.", "Appeler le point Responses plus récent au lieu de chat completions. Utilisez-le si votre backend le propose ; il porte l'état de session côté serveur.", "Den neueren Responses-Endpunkt statt chat completions aufrufen. Verwenden, wenn Ihr Backend ihn bietet; er trägt den Sitzungsstatus auf der Serverseite."),
+    TipStoreResponses("Sets store=true so the backend keeps each response. Needed when you also send previous_response_id.", "Zet store=true zodat de backend elke reactie bewaart. Nodig wanneer u ook previous_response_id meestuurt.", "Place store=true pour que le backend garde chaque réponse. Nécessaire si vous envoyez aussi previous_response_id.", "Setzt store=true, damit das Backend jede Antwort behält. Nötig, wenn Sie auch previous_response_id senden."),
+    TipSendResponseId("Sends previous_response_id so the backend reuses its own context instead of replaying the whole transcript each turn.", "Stuurt previous_response_id mee zodat de backend zijn eigen context hergebruikt in plaats van elke beurt het hele gesprek opnieuw te sturen.", "Envoie previous_response_id pour que le backend réutilise son propre contexte au lieu de rejouer tout le transcript à chaque tour.", "Sendet previous_response_id, damit das Backend seinen eigenen Kontext wiederverwendet, statt jeden Turn das ganze Protokoll erneut zu senden."),
+    TipMaxIterations("How many tool round-trips one answer may take before the loop stops. A guard against a tool that never settles.", "Hoeveel tool-rondes één antwoord mag maken voordat de lus stopt. Een bewaking tegen een tool die nooit uitkomt.", "Le nombre d'allers-retours d'outils qu'une réponse peut faire avant que la boucle s'arrête. Un garde-fou contre un outil qui ne se stabilise jamais.", "Wie viele Werkzeug-Runden eine Antwort machen darf, bevor die Schleife stoppt. Eine Sicherung gegen ein Werkzeug, das nie zur Ruhe kommt."),
+    TipAutoApproveSafe("Lets clearly safe read-only commands run without an approval prompt. Writes still ask unless the tool mode is auto.", "Laat duidelijk veilige alleen-lezen commando's draaien zonder een goedkeuringsprompt. Schrijven vraagt nog, tenzij de toolmodus op auto staat.", "Exécute les commandes en lecture seule manifestement sûres sans demande d'approbation. Les écritures demandent encore, sauf si le mode d'outil est auto.", "Lässt eindeutig sichere Nur-Lese-Befehle ohne Freigabeaufforderung laufen. Schreibfragen bleiben, außer der Werkzeugmodus steht auf auto."),
+    ContextTooLong(
+        "not sent: the conversation is estimated at {0} tokens, past the budget of {1}. Compact it, start a new conversation, or raise the budget.",
+        "niet verzonden: het gesprek wordt geschat op {0} tokens, voorbij het budget van {1}. Compact het, start een nieuw gesprek, of verhoog het budget.",
+        "non envoyé : la conversation est estimée à {0} jetons, au-delà du budget de {1}. Compactez-la, démarrez une nouvelle conversation ou relevez le budget.",
+        "nicht gesendet: die Unterhaltung wird auf {0} Token geschätzt, über dem Budget von {1}. Kompaktieren Sie sie, starten Sie eine neue Unterhaltung oder erhöhen Sie das Budget."
+    ),
+    ContextOverflow(
+        "the prompt no longer fits the model's context window. Compact this conversation (the Compact button folds it in batches, so it works even now), or start a new conversation.",
+        "de prompt past niet meer in het contextvenster van het model. Compact dit gesprek (de knop Compacten vouwt het in delen, dus dat lukt nu ook), of start een nieuw gesprek.",
+        "le prompt ne tient plus dans la fenêtre de contexte du modèle. Compactez cette conversation (le bouton Compresseur la replie par lots, il fonctionne donc encore) ou démarrez une nouvelle conversation.",
+        "der Prompt passt nicht mehr in das Kontextfenster des Modells. Kompaktieren Sie diese Unterhaltung (die Schaltfläche Kompaktieren faltet sie in Portionen, das gelingt jetzt auch) oder starten Sie eine neue Unterhaltung."
+    ),
     // ---- tools (settings) ---------------------------------------------------
     ToolModeLabel("tool mode", "toolmodus", "mode d'outil", "Werkzeugmodus"),
     ToolModeOff("off", "uit", "inactif", "aus"),
@@ -107,10 +144,19 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     EditReviewPrompt("allow Mule to write to {0}?", "Mule toestaan om {0} te schrijven?", "autoriser Mule à écrire dans {0} ?", "Mule erlauben, {0} zu schreiben?"),
     RunReviewTitle("run command", "commando uitvoeren", "exécuter la commande", "Befehl ausführen"),
     RunReviewPrompt("run this command in {0} (timeout {1}s)?", "voer dit commando uit in {0} (timeout {1}s)?", "exécuter cette commande dans {0} (délai {1} s) ?", "dieses Kommando in {0} ausführen (Timeout {1} s)?"),
+    AllowOnce("Allow once", "Eenmaal toestaan", "Autoriser une fois", "Einmal zulassen"),
+    AlwaysAllow("Always allow", "Altijd toestaan", "Toujours autoriser", "Immer zulassen"),
+    DenyButton("Deny", "Weigeren", "Refuser", "Ablehnen"),
+    AutoApproveSafe(
+        "Auto-approve safe read-only commands",
+        "Veilige alleen-lezen commando's automatisch goedkeuren",
+        "Approuver automatiquement les commandes en lecture seule sûres",
+        "Sichere schreibgeschützte Befehle automatisch genehmigen"
+    ),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
-    ErrMaxTokens("max output tokens is not a positive number", "max output tokens is geen positief getal", "le nombre maximal de jetons de sortie n'est pas un nombre positif", "max. Ausgabetoken ist keine positive Zahl"),
-    ErrContextBudget("context budget is not a positive number", "context-budget is geen positief getal", "le budget de contexte n'est pas un nombre positif", "Kontextbudget ist keine positive Zahl"),
+    ErrMaxTokens("max output tokens must be 0 or a positive number", "max output tokens moet 0 of een positief getal zijn", "les jetons de sortie max doivent être 0 ou un nombre positif", "max. Ausgabetoken muss 0 oder eine positive Zahl sein"),
+    ErrContextBudget("context budget must be 0 or a positive number", "context-budget moet 0 of een positief getal zijn", "le budget de contexte doit être 0 ou un nombre positif", "Kontextbudget muss 0 oder eine positive Zahl sein"),
     ErrTemperature("temperature must be between 0 and 2", "temperature moet tussen 0 en 2", "la température doit être comprise entre 0 et 2", "Temperatur muss zwischen 0 und 2 liegen"),
     ErrTopP("top_p must be between 0 (exclusive) and 1, or blank", "top_p moet tussen 0 (excl) en 1, of leeg", "top_p doit être entre 0 (exclus) et 1, ou vide", "top_p muss zwischen 0 (ausschließlich) und 1 sein, oder leer"),
     ErrBaseUrl("base url must start with http:// or https://", "basis-url moet met http:// of https:// beginnen", "l'url de base doit commencer par http:// ou https://", "Basis-URL muss mit http:// oder https:// beginnen"),
@@ -241,6 +287,19 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     ),
     FileTreeEmpty("empty folder", "lege map", "dossier vide", "leerer Ordner"),
     CopyPath("Copy path", "Kopieer pad", "Copier le chemin", "Pfad kopieren"),
+    FileTreeChangesHeader(
+        "changes ({0})", "wijzigingen ({0})", "modifications ({0})", "Änderungen ({0})"
+    ),
+    FileTreeChangesClean("no changes", "geen wijzigingen", "aucune modification", "keine Änderungen"),
+    FileTreeChangesNotGit(
+        "not a git repository", "geen git-repository", "n'est pas un dépôt Git", "kein Git-Repository"
+    ),
+    TipFileTreeChanges(
+        "Only the files git sees as new, changed or deleted. Double-click one for its patch; drag the bar above to give this list more or less room.",
+        "Alleen de bestanden die git als nieuw, gewijzigd of verwijderd ziet. Dubbelklik voor de patch; sleep de balk erboven om deze lijst meer of minder ruimte te geven.",
+        "Seulement les fichiers que Git voit comme nouveaux, modifiés ou supprimés. Double-cliquez pour la patch ; faites glisser la barre du haut pour donner plus ou moins de place à cette liste.",
+        "Nur die Dateien, die Git als neu, geändert oder gelöscht sieht. Doppelklick zeigt den Patch; ziehen Sie den Balken darüber, um dieser Liste mehr oder weniger Platz zu geben."
+    ),
 
     // ---- git status in the file tree -----------------------------------
     DiffTitle("Git changes for {0}", "Git-wijzigingen voor {0}", "Modifications Git pour {0}", "Git-Änderungen für {0}"),

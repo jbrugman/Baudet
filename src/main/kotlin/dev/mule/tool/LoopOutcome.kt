@@ -33,11 +33,15 @@ sealed class LoopOutcome {
         val capReached: Boolean = false
     ) : LoopOutcome()
 
-    /** The run hit [ToolLoop.maxIterations] while the model still wanted to act. */
+    /**
+     * The run stopped while the model still wanted to act, before a final answer. [incompleteReason]
+     * says which: the iteration cap, or the context ceiling that would only send a doomed request.
+     */
     data class CapReached(
         override val responseId: String?,
         override val steps: List<ToolStep>,
         override val messages: List<Msg>,
-        override val undos: List<() -> Unit>
+        override val undos: List<() -> Unit>,
+        val incompleteReason: String = "max_tool_iterations"
     ) : LoopOutcome()
 }

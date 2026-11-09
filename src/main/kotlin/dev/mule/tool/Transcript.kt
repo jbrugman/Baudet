@@ -13,6 +13,14 @@ import dev.mule.session.Msg
 object Transcript {
 
     /**
+     * Ceiling on the text replayed as prior turns, in characters (~3 chars per token, so about
+     * sixteen thousand tokens). Deliberately far below a 128k window: the instructions, the tools,
+     * the current input and the answer's own budget all still need room, and a local backend
+     * counts its chat template on top.
+     */
+    private const val MAX_REPLAY_CHARS = 48_000
+
+    /**
      * One model's control token, e.g. an end-of-turn marker wrapped in the special-tuple
      * form. Built from code points so the literal token never appears in this source.
      */
@@ -26,7 +34,35 @@ object Transcript {
         val userText = scrub(history.lastOrNull()?.content ?: "")
         val prior = history.dropLast(1)
             .map { it.copy(content = scrub(it.content)) }
-        return prior to userText
+        return fit(prior, MAX_REPLAY_CHARS) to userText
+    }
+
+    /**
+     * The newest prior turns that fit into one call, oldest first, with a marker standing in for
+     * whatever had to go. Without this a tool run grows one observation per round trip and
+     * re-sends all of them every iteration, so a long run dies partway through with a context
+     * error and the user loses the run at its most expensive moment. Dropping the oldest first
+     * keeps what the model needs to act now: its own last steps and the observations they
+     * produced. The kept part is always a contiguous tail, so the run still reads in order.
+     */
+    internal fun fit(prior: List<Msg>, maxChars: Int): List<Msg> {
+        if (maxChars <= 0) return prior
+        var used = 0
+        var first = prior.size
+        while (first > 0) {
+            val m = prior[first - 1]
+            // Same per-message allowance as SessionState.estimateTokens, so the two agree.
+            val cost = m.content.length + m.role.length + 8
+            if (used + cost > maxChars) break
+            used += cost
+            first--
+        }
+        val kept = prior.subList(first, prior.size).toList()
+        if (first == 0) return kept
+        // Model-facing note, so English whatever the UI speaks: it goes into the prompt.
+        val note = "[$first earlier messages were dropped from this request to keep it inside " +
+            "the model's context window. The oldest context is gone; the turns below are intact.]"
+        return listOf(Msg("user", note)) + kept
     }
 
     /**

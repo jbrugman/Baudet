@@ -19,5 +19,12 @@ class ToolContext(
     val execGranted: Boolean = false,
     val approveCommand: (command: String, workingDir: String, timeoutSeconds: Int) -> Boolean =
         { _, _, _ -> false },
-    val readGranted: Boolean = false
+    val readGranted: Boolean = false,
+    /**
+     * Exact commands the user chose to always allow: a command equal to one of these skips the
+     * approval prompt. Whole-string match only, so it can never widen to a chained variant.
+     */
+    val autoAllow: Set<String> = emptySet(),
+    /** When true, a command [SafeCommands] recognises as read-only also skips the approval prompt. */
+    val autoApproveSafe: Boolean = false
 )

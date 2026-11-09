@@ -85,7 +85,13 @@ fun main(args: Array<String>) {
         // Ask mode reaches back through AppState for a real decision; Auto bypasses it
         // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
         state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
-        state.approveCommand = { command, cwd, timeout -> confirmRun(frame, command, cwd, timeout) }
+        state.approveCommand = { command, cwd, timeout ->
+            when (confirmRun(frame, command, cwd, timeout)) {
+                RunDecision.Once -> true
+                RunDecision.Always -> { state.allowCommandAlways(command); true }
+                RunDecision.Deny -> false
+            }
+        }
 
         // Remember the window and both split widths when the window closes. A collapsed
         // side stays out of the saved geometry, so reopening never restores a hidden panel.
@@ -94,7 +100,8 @@ fun main(args: Array<String>) {
                 state.updateWindowGeometry(
                     frame.x, frame.y, frame.width, frame.height,
                     clampedDivider(layout.left, state.config.leftDivider),
-                    clampedDivider(layout.right, state.config.rightDivider)
+                    clampedDivider(layout.right, state.config.rightDivider),
+                    clampedDivider(layout.files.changesSplit, state.config.filesDivider)
                 )
             }
         })
@@ -107,8 +114,12 @@ fun main(args: Array<String>) {
     }
 }
 
-/** The two live split panes, kept so a rebuild can carry their current widths across. */
-private data class MainLayout(val left: JSplitPane, val right: JSplitPane)
+/**
+ * The live split panes plus the file panel, kept so a rebuild can carry their current sizes
+ * across. The file panel rides along for the sake of the bar inside it: the split between the
+ * tree and the change list is the panel's own business, but its height belongs to the layout.
+ */
+private data class MainLayout(val left: JSplitPane, val right: JSplitPane, val files: FileTreePanel)
 
 /** (Re)build every panel in the active language and put it on screen. */
 private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLayout {
@@ -129,7 +140,15 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
 
     // The file tree follows the project of whatever the sidebar selects; declared before the
     // sidebar so the selection callback can point straight at it.
-    val files = FileTreePanel(state).apply { minimumSize = Dimension(0, 0) }
+    val files = FileTreePanel(state).apply {
+        minimumSize = Dimension(0, 0)
+        // The panel already resolved its own height from the stored value; a rebuild carries the
+        // live position over it, exactly as the two window splits do.
+        val chosen = changesSplit.dividerLocation
+        changesSplit.dividerLocation = WindowLayout.resolveDivider(
+            previous?.files?.changesSplit?.dividerLocation, 0, chosen
+        )
+    }
 
     val sidebar = ProjectSidebar(
         state,
@@ -173,7 +192,7 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
-    return MainLayout(left, split)
+    return MainLayout(left, split, files)
 }
 
 /**
@@ -209,13 +228,15 @@ private fun applySavedLocation(frame: JFrame, config: AppConfig) {
 }
 
 /**
- * The width worth saving for one split: its live divider, unless that divider is collapsed
+ * The extent worth saving for one split: its live divider, unless that divider is collapsed
  * or unset -- zero, or at or past the far edge -- in which case the previously stored value
- * is kept so a collapse never becomes the reopened default.
+ * is kept so a collapse never becomes the reopened default. A vertical split runs out of
+ * height rather than width, which is what the change list under the file tree does.
  */
 private fun clampedDivider(split: JSplitPane, stored: Int): Int {
+    val extent = if (split.orientation == JSplitPane.VERTICAL_SPLIT) split.height else split.width
     val location = split.dividerLocation
-    return if (location <= 0 || location >= split.width) stored else location
+    return if (location <= 0 || location >= extent) stored else location
 }
 
 /**
@@ -259,8 +280,10 @@ private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
  * prompt. Approval is required even in Auto mode because running a command is the one
  * action the folder boundary cannot fence for us.
  */
-private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): Boolean {
-    var approved = false
+private enum class RunDecision { Deny, Once, Always }
+
+private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): RunDecision {
+    var decision = RunDecision.Deny
     try {
         SwingUtilities.invokeAndWait {
             val prompt = JTextArea(Texts.fmt(Key.RunReviewPrompt, workingDir, timeoutSeconds)).apply {
@@ -272,18 +295,30 @@ private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeo
                 font = Font(Font.MONOSPACED, Font.PLAIN, 12)
             }
             val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 200) }
-            approved = JOptionPane.showConfirmDialog(
+            // Three choices, not a bare yes/no: running once is the safe default, and "always" lets
+            // the user stop being asked about the very command now on screen. The command is pinned
+            // whole, so an allow here is an allow for exactly this string, never a chained variant.
+            val options = arrayOf(Texts[Key.AllowOnce], Texts[Key.AlwaysAllow], Texts[Key.DenyButton])
+            val choice = JOptionPane.showOptionDialog(
                 owner,
                 arrayOf<Any>(prompt, scroll),
                 Texts[Key.RunReviewTitle],
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-            ) == JOptionPane.YES_OPTION
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]
+            )
+            decision = when (choice) {
+                0 -> RunDecision.Once
+                1 -> RunDecision.Always
+                else -> RunDecision.Deny
+            }
         }
     } catch (_: Exception) {
-        approved = false
+        decision = RunDecision.Deny
     }
-    return approved
+    return decision
 }
 
 /**

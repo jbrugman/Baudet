@@ -35,6 +35,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val useResponses = JCheckBox(Texts[Key.UseResponsesApi])
     private val storeResp = JCheckBox(Texts[Key.StoreResponses])
     private val useServerSession = JCheckBox(Texts[Key.SendPreviousResponseId])
+    private val autoApproveSafe = JCheckBox(Texts[Key.AutoApproveSafe])
     private val toolMode = JComboBox(arrayOf(Texts[Key.ToolModeOff], Texts[Key.ToolModeAsk], Texts[Key.ToolModeAuto]))
     private val maxIterations = JTextField(6)
     private val systemPrompt = JTextArea(5, 34).apply {
@@ -52,6 +53,21 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     init {
         language.toolTipText = Texts[Key.TipLanguage]
         toolMode.toolTipText = Texts[Key.TipToolMode]
+        baseUrl.toolTipText = Texts[Key.TipBaseUrl]
+        apiKey.toolTipText = Texts[Key.TipApiKey]
+        envVar.toolTipText = Texts[Key.TipEnvVar]
+        model.toolTipText = Texts[Key.TipModel]
+        maxTokens.toolTipText = Texts[Key.TipMaxTokens]
+        contextBudget.toolTipText = Texts[Key.TipContextBudget]
+        temperature.toolTipText = Texts[Key.TipTemperature]
+        topP.toolTipText = Texts[Key.TipTopP]
+        reasoning.toolTipText = Texts[Key.TipReasoning]
+        systemPrompt.toolTipText = Texts[Key.TipSystemPrompt]
+        useResponses.toolTipText = Texts[Key.TipUseResponses]
+        storeResp.toolTipText = Texts[Key.TipStoreResponses]
+        useServerSession.toolTipText = Texts[Key.TipSendResponseId]
+        autoApproveSafe.toolTipText = Texts[Key.TipAutoApproveSafe]
+        maxIterations.toolTipText = Texts[Key.TipMaxIterations]
         val form = formPanel(
             listOf(
                 Texts[Key.LanguageLabel] to language,
@@ -69,6 +85,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 "" to useResponses,
                 "" to storeResp,
                 "" to useServerSession,
+                "" to autoApproveSafe,
                 Texts[Key.SystemPromptLabel] to systemPrompt
             )
         )
@@ -110,6 +127,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         useResponses.isSelected = c.useResponsesApi
         storeResp.isSelected = c.storeResponses
         useServerSession.isSelected = c.useServerSession
+        autoApproveSafe.isSelected = c.autoApproveSafeCommands
         // Raw stored text: blank means "use the built-in default", which the
         // field label says. Showing the resolved text here would store it back
         // as user text and freeze it against later language changes.
@@ -127,10 +145,13 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     private fun collect(): AppConfig? {
+        // Zero is a real choice, not a missing one: a max-output of 0 omits the field so the
+        // server decides, and a budget of 0 turns the context guard off. Only a non-number or a
+        // negative is rejected, which is exactly what the error text already promises.
         val mt = maxTokens.text.trim().toIntOrNull()
-        if (mt == null || mt <= 0) { fail(Texts[Key.ErrMaxTokens]); return null }
+        if (mt == null || mt < 0) { fail(Texts[Key.ErrMaxTokens]); return null }
         val cb = contextBudget.text.trim().toIntOrNull()
-        if (cb == null || cb <= 0) { fail(Texts[Key.ErrContextBudget]); return null }
+        if (cb == null || cb < 0) { fail(Texts[Key.ErrContextBudget]); return null }
         val temp = temperature.text.trim().toDoubleOrNull()
         if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.ErrTemperature]); return null }
         val tp = topP.text.trim()
@@ -158,6 +179,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             useResponsesApi = useResponses.isSelected,
             storeResponses = storeResp.isSelected,
             useServerSession = useServerSession.isSelected,
+            autoApproveSafeCommands = autoApproveSafe.isSelected,
             toolMode = ToolMode.entries[toolMode.selectedIndex],
             maxToolIterations = mi,
             systemPrompt = systemPrompt.text

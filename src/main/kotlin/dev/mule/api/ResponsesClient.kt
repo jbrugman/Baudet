@@ -53,7 +53,9 @@ class ResponsesClient(private val cfg: AppConfig) {
         if (system.isNotBlank()) put("instructions", system)
         put("stream", true)
         put("store", cfg.storeResponses)
-        put("max_output_tokens", cfg.maxOutputTokens)
+        // 0 means the user asked the server to decide: sending 0 is not the same as sending
+        // nothing -- it caps the answer at nothing -- so the field is left out entirely.
+        if (cfg.maxOutputTokens > 0) put("max_output_tokens", cfg.maxOutputTokens)
         put("temperature", cfg.temperature)
         cfg.topP?.let { put("top_p", it) }
         cfg.reasoningEffort?.takeIf { it.isNotBlank() }?.let { e ->

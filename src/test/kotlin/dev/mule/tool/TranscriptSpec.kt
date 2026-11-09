@@ -46,6 +46,50 @@ class TranscriptSpec : BehaviorSpec({
         }
     }
 
+    /**
+     * A long tool run re-sends every observation on every iteration, so without a ceiling it
+     * grows until the backend refuses the whole run. These pin the ceiling: it keeps a
+     * contiguous newest tail, says what it dropped, and never drops anything that fits.
+     */
+    given("prior turns that do not fit into one call") {
+        val prior = (1..10).map { Msg("user", "m$it-" + "x".repeat(90)) }
+        `when`("fitting them into a small ceiling") {
+            val kept = Transcript.fit(prior, 300)
+            then("the newest turns survive, in their original order") {
+                (kept.size < prior.size) shouldBe true
+                kept.drop(1).map { it.content } shouldBe prior.takeLast(kept.size - 1).map { it.content }
+            }
+            then("one marker stands in for the turns that had to go, and names how many") {
+                val dropped = prior.size - (kept.size - 1)
+                kept.size shouldBe prior.size - dropped + 1
+                (kept.first().content.contains("[$dropped earlier messages")) shouldBe true
+            }
+        }
+    }
+
+    given("prior turns that fit") {
+        val prior = listOf(Msg("user", "short"), Msg("assistant", "answer"))
+        `when`("fitting them") {
+            then("nothing is dropped and no marker is invented") {
+                Transcript.fit(prior, 100_000) shouldBe prior
+            }
+            then("a ceiling of zero means the guard is off, so the whole run replays") {
+                Transcript.fit(prior, 0) shouldBe prior
+            }
+        }
+    }
+
+    given("an oversized single turn inside the prior turns") {
+        val prior = listOf(Msg("user", "small"), Msg("user", "y".repeat(10_000)))
+        `when`("fitting it into a ceiling smaller than that turn") {
+            val kept = Transcript.fit(prior, 50)
+            then("nothing is kept, but the call still goes out with a marker") {
+                kept.size shouldBe 1
+                (kept.first().content.contains("[2 earlier messages")) shouldBe true
+            }
+        }
+    }
+
     given("a tool turn that appended two observations after one answer") {
         val history = listOf(
             Msg("user", "the prompt"),

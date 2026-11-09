@@ -164,6 +164,88 @@ class AppStateSpec : BehaviorSpec({
         }
     }
 
+    /**
+     * The guard that keeps an oversized conversation from being sent at all. It has to agree with
+     * the number the status line shows, or the user is refused for a reason the app never
+     * displayed, and it has to stay silent when the budget is switched off.
+     */
+    given("a conversation over the configured context budget") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 100))
+        state.session.messages.add(Msg("user", "a".repeat(4_000)))
+        `when`("asking whether this may be sent") {
+            val reason = state.contextGuard()
+            then("it is refused, naming both the estimate and the budget") {
+                (reason != null) shouldBe true
+                // The refusal must name the very number the status line shows, not another.
+                (reason!!.contains(state.session.estimateTokens().toString())) shouldBe true
+                (reason!!.contains("100")) shouldBe true
+            }
+        }
+    }
+
+    given("a conversation inside the budget") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 100_000))
+        state.session.messages.add(Msg("user", "short question"))
+        `when`("asking whether this may be sent") {
+            then("nothing holds it back") { state.contextGuard() shouldBe null }
+        }
+    }
+
+    given("a budget of zero, meaning the guard is off") {
+        val state = freshState()
+        state.saveConfig(state.config.copy(contextBudgetTokens = 0))
+        state.session.messages.add(Msg("user", "a".repeat(400_000)))
+        `when`("asking whether this may be sent") {
+            then("the estimate is not consulted, so the user decides") {
+                state.contextGuard() shouldBe null
+            }
+        }
+    }
+
+    /*
+     * Auto-compaction is a model call, so it must not fire on a conversation that already fits
+     * or when the budget is off; only a genuine over-budget turn should fold. These pin the two
+     * safe early-return paths so an inverted guard cannot silently spend a request on every send.
+     */
+    given("pinning a command to always allow") {
+        val state = freshState()
+        `when`("a command is allowed always") {
+            state.allowCommandAlways("mvn -B test")
+            then("it is persisted, so a restart keeps the decision") {
+                (state.store.load()?.autoAllowCommands?.contains("mvn -B test")) shouldBe true
+            }
+            then("repeating it does not add a duplicate") {
+                state.allowCommandAlways("mvn -B test")
+                state.store.load()?.autoAllowCommands?.count { it == "mvn -B test" } shouldBe 1
+            }
+        }
+    }
+
+    given("auto-compaction for the next turn") {
+        `when`("the budget is switched off") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(contextBudgetTokens = 0))
+            state.session.messages.add(Msg("user", "a".repeat(400_000)))
+            val before = state.session.messages.size
+            state.autoCompactIfNeeded()
+            then("nothing runs, so no turn is folded away") {
+                state.session.messages.size shouldBe before
+            }
+        }
+        `when`("the conversation fits inside the budget") {
+            val state = freshState()
+            state.saveConfig(state.config.copy(contextBudgetTokens = 100_000))
+            state.session.messages.add(Msg("user", "short question"))
+            val before = state.session.messages.size
+            state.autoCompactIfNeeded()
+            then("the guard sees room to spare, so nothing is folded away") {
+                state.session.messages.size shouldBe before
+            }
+        }
+    }
+
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
             val state = freshState()

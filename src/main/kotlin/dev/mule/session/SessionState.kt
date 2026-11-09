@@ -16,12 +16,8 @@ class SessionState(
     /** The project this conversation belongs to; null means the Unassigned bucket. */
     var projectId: String? = null
 
-    /** Rough heuristic (~4 chars/token). No tokenizer: those are model-specific. */
-    fun estimateTokens(): Long {
-        var chars = summary?.length ?: 0
-        messages.forEach { chars += it.content.length + it.role.length + 8 }
-        return chars / 4L
-    }
+    /** Rough heuristic (~3 chars/token). No tokenizer: those are model-specific. */
+    fun estimateTokens(): Long = estimateTokensOf(messages, summary?.length ?: 0)
 
     /**
      * The kept turns for client-side replay. The summary is deliberately NOT folded in
@@ -33,5 +29,19 @@ class SessionState(
 
     fun transcript(): String = buildString {
         messages.forEach { m -> append(m.role).append(": ").append(m.content).append("\n\n") }
+    }
+
+    companion object {
+        /**
+         * The same rough estimate for any message list: ~3 chars/token plus a small per-turn
+         * allowance for the role and the chat-template wrapper. Shared on purpose: the status
+         * line, the pre-send guard and the in-loop ceiling all measure one way, so a request is
+         * never stopped or allowed by a number that disagrees with the one shown to the user.
+         */
+        fun estimateTokensOf(messages: List<Msg>, summaryChars: Int = 0): Long {
+            var chars = summaryChars
+            messages.forEach { chars += it.content.length + it.role.length + 8 }
+            return chars / 3L
+        }
     }
 }

@@ -39,11 +39,16 @@ class ProcessRunnerSpec : FunSpec({
         result.body() shouldContain "--- stderr"
     }
 
-    test("a chatty stream is capped but still drained") {
-        val result = sh("yes A | head -c 200000")
+    test("a chatty stream keeps its head and tail, marks the middle, and is still drained") {
+        val result = sh("{ printf HEAD; yes M | head -c 200000; printf TAIL; }")
         result.stdout.truncated shouldBe true
-        result.stdout.text.length shouldBe 65536
-        (result.stdout.length >= 100000) shouldBe true
+        (result.stdout.length >= 200000) shouldBe true
+        // The very start and the very end survive the cap; only the middle is dropped.
+        result.stdout.text.startsWith("HEAD") shouldBe true
+        result.stdout.text.endsWith("TAIL") shouldBe true
+        // The dropped middle is named, and the kept text stays small.
+        result.stdout.text shouldContain "bytes omitted"
+        (result.stdout.text.length < 100_000) shouldBe true
     }
 
     test("a run past its timeout is killed and reported as timed out") {
