@@ -363,6 +363,26 @@ class AppStateSpec : BehaviorSpec({
     }
 
 
+    given("remembering the reasoning dock height") {
+        val state = freshState()
+        `when`("the user drags the dock divider") {
+            state.rememberReasoningDivider(123)
+            then("the live config keeps the dragged height") {
+                state.config.reasoningDivider shouldBe 123
+            }
+            then("the height is persisted, so a restart keeps it") {
+                state.store.load()?.reasoningDivider shouldBe 123
+            }
+        }
+        `when`("a non-positive height arrives") {
+            state.rememberReasoningDivider(123)
+            state.rememberReasoningDivider(0)
+            then("a reset never overwrites the stored height") {
+                state.config.reasoningDivider shouldBe 123
+            }
+        }
+    }
+
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
             val state = freshState()

@@ -147,6 +147,19 @@ class AppState(val store: H2Store) {
     }
 
     /**
+     * Remember the height of the reasoning dock so a rebuild, such as a language change, and
+     * the next launch reopen it where the user left it. A non-positive value means never
+     * dragged, which lets the dock fall back to the input's own height. Like
+     * [updateWindowGeometry] it rides in the same single-row JSON blob, so no schema is touched,
+     * and it never fires [onConfigSaved], so storing the dock height cannot trigger a rebuild.
+     */
+    fun rememberReasoningDivider(px: Int) {
+        if (px <= 0) return
+        config = config.copy(reasoningDivider = px)
+        store.save(config)
+    }
+
+    /**
      * Remember where and how big the user left the diff viewer, so the next patch reopens
      * there instead of re-centering at the small default. Like [updateWindowGeometry] it
      * rides in the same single-row JSON blob, so no schema is touched.

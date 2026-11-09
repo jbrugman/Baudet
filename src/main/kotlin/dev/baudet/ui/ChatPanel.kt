@@ -10,8 +10,6 @@ import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
 import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ActionEvent
@@ -21,6 +19,7 @@ import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JSplitPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.JTextPane
@@ -127,18 +126,22 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * long reasoning block scrolls inside the dock instead of inflating it and pushing the
      * transcript up, which a layout that splits rows equally could not avoid.
      */
-    private val stack = JPanel(GridBagLayout())
+    /** Hosts the input alone, or the dock-plus-input split once reasoning is on show. */
+    private val stack = JPanel(BorderLayout())
 
-    /** Full width at the child's own preferred height, so the two rows never share a height. */
-    private fun rowConstraints() = GridBagConstraints().apply {
-        gridx = 0
-        gridwidth = 1
-        gridheight = 1
-        fill = GridBagConstraints.HORIZONTAL
-        weightx = 1.0
-        weighty = 0.0
-        anchor = GridBagConstraints.NORTHWEST
+    /** The input's viewport, parented wherever the south block currently needs it. */
+    private val inputScroll = JScrollPane(input).apply { minimumSize = Dimension(0, 0) }
+    /** The reasoning dock over the input, dragged as one; parented only while the dock shows. */
+    private val bottomSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT).apply {
+        isContinuousLayout = false   // settles on release, so the size saves then, not per pixel
+        resizeWeight = 0.0           // the input keeps its height; the dock absorbs the drag
+        isOneTouchExpandable = false
+        border = null
     }
+    /** Whether the split (dock shown) or the plain input is currently the south CENTER. */
+    private var splitMode = false
+    /** The dock's height before the user drags: the input's own preferred height, set at build. */
+    private var defaultDockHeight = 40
 
     /** The renderer of the live turn, so that completion and failure can both flush its tail. */
     private var lastRender: TurnRender? = null
@@ -190,24 +193,22 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     var onSessionsChanged: () -> Unit = {}
 
     init {
-        val buttons = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
-        buttons.add(sendButton)
-        buttons.add(stopButton)
-        buttons.add(newSessionButton)
-        buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
+        // Send, New session and Compact share a wrapping left group; Stop is pinned to the far
+        // right so the one action that abandons a turn never hides among the others. The left
+        // group still wraps, and the scroll/status fields drop their default (== preferred)
+        // minimum, so a narrow chat no longer holds the sidebar divider hostage.
+        val leftGroup = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
+        leftGroup.add(sendButton)
+        leftGroup.add(newSessionButton)
+        leftGroup.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
+        val buttons = JPanel(BorderLayout())
+        buttons.add(leftGroup, BorderLayout.WEST)
+        buttons.add(stopButton, BorderLayout.EAST)
 
-        // The right pane must stay free to shrink, or the sidebar split caps its
-        // width at whatever this column refuses to give up: WrapLayout lets the toolbar
-        // wrap, and the scroll/status fields drop their default (== preferred) minimum,
-        // so a narrow chat no longer holds the divider hostage.
-        val inputScroll = JScrollPane(input).apply { minimumSize = Dimension(0, 0) }
-        stack.add(inputScroll, rowConstraints())
-        // The dock reads at the input's own height and scrolls beyond it, so reasoning can
-        // grow only inside its viewport. A JTextArea sized by rows reports its preferred
-        // height before the frame is shown, so this tie is available right here at build time.
-        val dockHeight = inputScroll.preferredSize.height.coerceAtLeast(40)
-        thinkingScroll.preferredSize = Dimension(0, dockHeight)
-        thinkingScroll.maximumSize = Dimension(Int.MAX_VALUE, dockHeight)
+        // A JTextArea sized by rows reports its preferred height before the frame is shown, so
+        // the dock's default height is available right here at build time.
+        defaultDockHeight = inputScroll.preferredSize.height.coerceAtLeast(40)
+        thinkingScroll.preferredSize = Dimension(0, defaultDockHeight)
         val south = JPanel(BorderLayout())
         // The header sits under the toolbar and the dock straight above the input, so closing
         // the dock hands its rows back to the input without moving anything else around.
@@ -224,6 +225,17 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
         add(scroll, BorderLayout.CENTER)
         add(south, BorderLayout.SOUTH)
+
+        // A released divider is the moment worth saving: the split is not continuous, so this
+        // fires on mouse-up rather than per pixel, and only while the dock is actually shown.
+        bottomSplit.addPropertyChangeListener { e ->
+            if (e.propertyName == "dividerLocation" && splitMode)
+                state.rememberReasoningDivider(bottomSplit.dividerLocation)
+        }
+
+        // Start with no reasoning: the plain input, no divider bar. applyDock brings the split
+        // in the first time a thinking turn fills the dock.
+        stack.add(inputScroll, BorderLayout.CENTER)
 
         sendButton.addActionListener { send() }
         val enter = KeyStroke.getKeyStroke("control ENTER")
@@ -263,14 +275,27 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Adding and removing beats hiding: an invisible child still reserves its slot, so a hidden
-     * dock would leave a gap exactly where the reasoning used to read.
+     * Swap the south block between the plain input and the dock-plus-input split. Swapping beats
+     * hiding a divider: an invisible top component still leaves a bare bar over an input that has
+     * nothing to resize against, the one layout glitch this must never show. The split restores
+     * the remembered divider through the same rule the window splits use.
      */
     private fun applyDock() {
         thinkingHeader.isVisible = hasThinking
         val wanted = ThinkingLayout.dockWanted(hasThinking, thinkingCollapsed)
-        if (wanted && thinkingScroll.parent == null) stack.add(thinkingScroll, rowConstraints(), 0)
-        if (!wanted && thinkingScroll.parent != null) stack.remove(thinkingScroll)
+        if (wanted == splitMode) return
+        stack.removeAll()
+        if (wanted) {
+            bottomSplit.topComponent = thinkingScroll
+            bottomSplit.bottomComponent = inputScroll
+            bottomSplit.dividerLocation = WindowLayout.resolveDivider(
+                null, state.config.reasoningDivider, defaultDockHeight
+            )
+            stack.add(bottomSplit, BorderLayout.CENTER)
+        } else {
+            stack.add(inputScroll, BorderLayout.CENTER)
+        }
+        splitMode = wanted
         stack.revalidate()
         stack.repaint()
     }
