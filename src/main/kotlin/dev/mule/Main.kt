@@ -78,6 +78,7 @@ fun main(args: Array<String>) {
         // Ask mode reaches back through AppState for a real decision; Auto bypasses it
         // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
         state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
+        state.approveCommand = { command, cwd, timeout -> confirmRun(frame, command, cwd, timeout) }
 
         frame.isVisible = true
     }
@@ -171,6 +172,40 @@ private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
                 owner,
                 arrayOf<Any>(prompt, scroll),
                 Texts[Key.EditReviewTitle],
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            ) == JOptionPane.YES_OPTION
+        }
+    } catch (_: Exception) {
+        approved = false
+    }
+    return approved
+}
+
+/**
+ * Mirrors [confirmEdit] for a run request: modal to the frame, blocking the worker, and
+ * denying on any failure. The command is shown verbatim in a monospaced area so the user
+ * sees exactly what will execute, with the working directory and timeout carried in the
+ * prompt. Approval is required even in Auto mode because running a command is the one
+ * action the folder boundary cannot fence for us.
+ */
+private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): Boolean {
+    var approved = false
+    try {
+        SwingUtilities.invokeAndWait {
+            val prompt = JTextArea(Texts.fmt(Key.RunReviewPrompt, workingDir, timeoutSeconds)).apply {
+                isEditable = false
+                isOpaque = false
+            }
+            val preview = JTextArea(command).apply {
+                isEditable = false
+                font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+            }
+            val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 200) }
+            approved = JOptionPane.showConfirmDialog(
+                owner,
+                arrayOf<Any>(prompt, scroll),
+                Texts[Key.RunReviewTitle],
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.QUESTION_MESSAGE
             ) == JOptionPane.YES_OPTION

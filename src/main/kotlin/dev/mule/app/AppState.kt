@@ -16,6 +16,7 @@ import dev.mule.store.H2Store
 import dev.mule.store.SessionSummary
 import dev.mule.tool.CallExtractor
 import dev.mule.tool.EditFileTool
+import dev.mule.tool.ExecuteTool
 import dev.mule.tool.ReadFileTool
 import dev.mule.tool.LoopOutcome
 import dev.mule.tool.PromptedCallExtractor
@@ -85,6 +86,15 @@ class AppState(val store: H2Store) {
      * Auto mode bypasses it, and the tool never calls it when tools are off.
      */
     var approveEdit: (relativePath: String, diff: String) -> Boolean = { _, _ -> false }
+
+    /**
+     * The run equivalent of [approveEdit]. A command is shown for confirmation and, unlike
+     * an edit, it stays required even in Auto mode: a subprocess cannot be fenced by the
+     * folder boundary, so the human is the only real guard. Default deny, so an unattended
+     * loop never runs a command on its own.
+     */
+    var approveCommand: (command: String, workingDir: String, timeoutSeconds: Int) -> Boolean =
+        { _, _, _ -> false }
 
     fun saveConfig(next: AppConfig) {
         config = next
@@ -188,7 +198,8 @@ class AppState(val store: H2Store) {
         if (config.toolMode == ToolMode.Off) return ToolGate.Disabled
         val project = currentProject(s) ?: return ToolGate.NoProject
         if (project.folderPath.isNullOrBlank()) return ToolGate.NoFolder
-        if (!project.isGranted(FolderPermission.Write)) return ToolGate.NoWrite
+        if (!project.isGranted(FolderPermission.Write) && !project.isGranted(FolderPermission.Execute))
+            return ToolGate.NoWrite
         return ToolGate.Active
     }
 
@@ -288,18 +299,26 @@ class AppState(val store: H2Store) {
         onReasoning: (String) -> Unit
     ): Turn {
         val project = currentProject(s)
-            ?: error("runToolTurn invoked without a writable project") // toolsActive() has gated this
+            ?: error("runToolTurn invoked without a gated project") // toolsActive() has gated this
+        val writable = project.isGranted(FolderPermission.Write)
+        val executable = project.isGranted(FolderPermission.Execute)
         val context = ToolContext(
             root = Paths.get(project.folderPath!!),
-            writeGranted = true,
-            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit
+            writeGranted = writable,
+            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
+            execGranted = executable,
+            approveCommand = approveCommand
         )
         // The wire format is model-facing, so it joins the English system prompt only
         // when tools are live; a plain or tool-less turn never mentions it.
         val system = instructionsFor(s) + "\n\n" + CallExtractor.PROTOCOL
         val loop = ToolLoop(
             turnSource = ResponsesTurnSource(ResponsesClient(config), system),
-            registry = ToolRegistry(listOf(EditFileTool(), ReadFileTool())),
+            registry = ToolRegistry(buildList {
+                add(ReadFileTool())
+                if (writable) add(EditFileTool())
+                if (executable) add(ExecuteTool())
+            }),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
             chainResponseId = config.useServerSession && s.previousResponseId != null

@@ -7,10 +7,13 @@ import java.nio.file.Path
  * there is allowed, and how to ask the human before a write lands. [approve] is a
  * plain callback so the tool stays free of Swing -- the UI decides how to ask and
  * runs it on the event thread, while the tool blocks on the answer. A null [root]
- * or a false [writeGranted] is a reason to refuse, checked by the tool itself.
+ * or a false [writeGranted] is a reason to refuse, checked by the tool itself. The Execute right defaults off and its approval defaults to deny, so callers that never run a command need pass neither [execGranted] nor [approveCommand].
  */
 class ToolContext(
     val root: Path?,
     val writeGranted: Boolean,
-    val approve: (relativePath: String, diff: String) -> Boolean
+    val approve: (relativePath: String, diff: String) -> Boolean,
+    val execGranted: Boolean = false,
+    val approveCommand: (command: String, workingDir: String, timeoutSeconds: Int) -> Boolean =
+        { _, _, _ -> false }
 )
