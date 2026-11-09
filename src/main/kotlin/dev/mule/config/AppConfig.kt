@@ -66,10 +66,13 @@ data class AppConfig(
     var leftDivider: Int = 0,
     var rightDivider: Int = 0,
     /**
-     * The size the user last left the diff viewer at, so a patch reopens at a size they
-     * chose rather than the small default. Zero means never stored, which lets the viewer
-     * fall back to its own default on the first open.
+     * Where and how big the user last left the diff viewer, so a patch reopens there rather
+     * than re-centering at the small default. Zero size means never stored, which lets the
+     * viewer fall back to its own default on the first open; the position is trusted only once
+     * a size was stored, mirroring the main window.
      */
+    var diffPopupX: Int = 0,
+    var diffPopupY: Int = 0,
     var diffPopupWidth: Int = 0,
     var diffPopupHeight: Int = 0
 ) {

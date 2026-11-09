@@ -108,6 +108,8 @@ class AppConfigSpec : BehaviorSpec({
                 cfg.windowHeight shouldBe 0
                 cfg.leftDivider shouldBe 0
                 cfg.rightDivider shouldBe 0
+                cfg.diffPopupX shouldBe 0
+                cfg.diffPopupY shouldBe 0
                 cfg.diffPopupWidth shouldBe 0
                 cfg.diffPopupHeight shouldBe 0
             }
@@ -116,6 +118,7 @@ class AppConfigSpec : BehaviorSpec({
             val cfg = AppConfig(
                 windowX = 80, windowY = 60, windowWidth = 1040,
                 windowHeight = 720, leftDivider = 280, rightDivider = 700,
+                diffPopupX = 40, diffPopupY = 120,
                 diffPopupWidth = 900, diffPopupHeight = 640
             )
             val back = json.decodeFromString(
@@ -128,6 +131,8 @@ class AppConfigSpec : BehaviorSpec({
                 back.windowHeight shouldBe 720
                 back.leftDivider shouldBe 280
                 back.rightDivider shouldBe 700
+                back.diffPopupX shouldBe 40
+                back.diffPopupY shouldBe 120
                 back.diffPopupWidth shouldBe 900
                 back.diffPopupHeight shouldBe 640
             }

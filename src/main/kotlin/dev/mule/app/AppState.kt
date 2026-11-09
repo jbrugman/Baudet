@@ -123,12 +123,15 @@ class AppState(val store: H2Store) {
     }
 
     /**
-     * Remember the size the user left the diff viewer at, so the next patch opens at that
-     * size instead of the small default. Like [updateWindowGeometry] it rides in the same
-     single-row JSON blob, so no schema is touched.
+     * Remember where and how big the user left the diff viewer, so the next patch reopens
+     * there instead of re-centering at the small default. Like [updateWindowGeometry] it
+     * rides in the same single-row JSON blob, so no schema is touched.
      */
-    fun updateDiffPopupSize(width: Int, height: Int) {
-        config = config.copy(diffPopupWidth = width, diffPopupHeight = height)
+    fun updateDiffPopupBounds(x: Int, y: Int, width: Int, height: Int) {
+        config = config.copy(
+            diffPopupX = x, diffPopupY = y,
+            diffPopupWidth = width, diffPopupHeight = height
+        )
         store.save(config)
     }
 
