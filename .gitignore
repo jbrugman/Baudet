@@ -1,5 +1,5 @@
 target/
-mule-data/
+baudet-data/
 .idea/
 *.iml
 .DS_Store

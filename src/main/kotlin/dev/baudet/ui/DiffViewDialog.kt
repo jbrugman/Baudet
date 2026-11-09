@@ -1,0 +1,243 @@
+package dev.baudet.ui
+
+import dev.baudet.diff.DiffHighlight
+import dev.baudet.diff.DiffLineKind
+import dev.baudet.i18n.Key
+import dev.baudet.i18n.Texts
+import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.Component
+import java.awt.Dialog
+import java.awt.Dimension
+import java.awt.FlowLayout
+import java.awt.Font
+import java.awt.GraphicsEnvironment
+import java.awt.Insets
+import java.awt.Rectangle
+import javax.swing.JButton
+import javax.swing.JDialog
+import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextPane
+import javax.swing.SwingUtilities
+import javax.swing.WindowConstants
+import javax.swing.text.Style
+import javax.swing.text.StyleConstants
+import javax.swing.text.StyleContext
+
+/**
+ * A read-only modal that shows the git patch for one file, or a short reason why there is none.
+ * Opened from the file tree on double-click. Must be called on the event dispatch thread, which
+ * is where the tree mouse handler already runs. It reopens where the user left it last, at the
+ * size they left it at ([rememberedX], [rememberedY], [rememberedW] and [rememberedH], each
+ * falling back to a default or to centering when unset), and reports the full bounds it closed
+ * at through [onClosed], so a moved or widened viewer is not reset on the next patch. A
+ * remembered spot that no longer lands on any screen falls back to centering, exactly as the
+ * main window does. Added lines read green and removed lines red, so a patch is legible at a
+ * glance; the palette is tuned for the dark FlatLaf theme rather than a light editor.
+ *
+ * A file with no patch to show can still carry [plainBody]: the message then stays on top in
+ * the normal color and the file content follows below it in the same muted gray the chat uses
+ * for reasoning. Those lines are never classified as diff lines, so content that happens to
+ * start with a plus or a minus cannot be mistaken for an addition or a removal.
+ *
+ * When the file itself is readable it can also be shown whole, through [fileBody] and
+ * [fileTitle]: a button at the bottom then switches the window between the patch and the file,
+ * verbatim and uncolored. That is the whole of it -- a way to read a file and copy from it, not
+ * a place to change one. [fileFirst] opens it on the file instead, which is what a folder
+ * outside git gets, since for it there is no patch to show at all.
+ */
+object DiffViewDialog {
+
+    fun open(
+        owner: Component,
+        title: String,
+        text: String,
+        rememberedX: Int,
+        rememberedY: Int,
+        rememberedW: Int,
+        rememberedH: Int,
+        plainBody: String? = null,
+        fileBody: String? = null,
+        fileTitle: String? = null,
+        fileFirst: Boolean = false,
+        onClosed: (x: Int, y: Int, width: Int, height: Int) -> Unit
+    ) {
+        val parent = SwingUtilities.getWindowAncestor(owner)
+        val dialog = JDialog(parent, title, Dialog.ModalityType.APPLICATION_MODAL)
+        // Hide rather than dispose on close, so the final bounds can still be read back before
+        // we dispose it ourselves: a disposed window may have released the native peer that
+        // reports its bounds, and those bounds are exactly what we want to remember.
+        dialog.defaultCloseOperation = WindowConstants.HIDE_ON_CLOSE
+        val pane = JTextPane().apply {
+            isEditable = false
+            margin = Insets(8, 8, 8, 8)
+        }
+        var showsFile = fileBody != null && fileFirst
+
+        // Both bodies go through one renderer, so switching cannot leave the previous one behind
+        // or keep the other one's title. Clearing through setText rather than the document keeps
+        // the pane on the styled document it was built with, so the styles inserted below resolve
+        // exactly as they did on the first render.
+        fun render() {
+            pane.text = ""
+            dialog.title = if (showsFile) fileTitle ?: title else title
+            if (showsFile) renderFile(pane, fileBody.orEmpty()) else renderDiff(pane, text, plainBody)
+            pane.caretPosition = 0
+        }
+        render()
+
+        dialog.contentPane.layout = BorderLayout()
+        dialog.contentPane.add(JScrollPane(pane).apply {
+            preferredSize = Dimension(
+                WindowLayout.resolveDialogSize(rememberedW, DEFAULT_WIDTH),
+                WindowLayout.resolveDialogSize(rememberedH, DEFAULT_HEIGHT)
+            )
+        }, BorderLayout.CENTER)
+        // The switch appears only when a second body exists. A deleted file, a binary or one over
+        // the size cap has no readable content, and a button that switches to nothing is a lie.
+        if (fileBody != null && fileTitle != null) {
+            val toggle = JButton()
+            toggle.isFocusable = false
+            fun relabel() {
+                toggle.text = Texts[if (showsFile) Key.DiffShowPatch else Key.DiffShowFile]
+            }
+            toggle.addActionListener {
+                showsFile = !showsFile
+                render()
+                relabel()
+            }
+            relabel()
+            dialog.contentPane.add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 6, 4)).apply { add(toggle) },
+                BorderLayout.SOUTH
+            )
+        }
+        // pack realizes the native peer, so the placement below lands: a location set before
+        // the peer exists is dropped on macOS, the same reason the main window only trusts a
+        // saved spot once the window is displayable.
+        dialog.pack()
+        place(dialog, owner, rememberedX, rememberedY, rememberedW, rememberedH)
+        dialog.isVisible = true
+        val x = dialog.x
+        val y = dialog.y
+        val width = dialog.width
+        val height = dialog.height
+        dialog.dispose()
+        if (WindowLayout.shouldRememberDialogSize(width, height, MIN_SIZE))
+            onClosed(x, y, width, height)
+    }
+
+    /**
+     * Fill [pane] with [text] line by line, coloring each line by its diff kind, then [plainBody]
+     * beneath it in gray when given. The text is inserted straight into the styled document
+     * instead of through setText, because the viewer shows raw patch text that can contain braces
+     * and backslashes, which a rich-text reader would otherwise try to interpret. A trailing empty
+     * line is preserved, since splitting on a newline keeps it and rejoining with the same
+     * separator is lossless.
+     */
+    private fun renderDiff(pane: JTextPane, text: String, plainBody: String?) {
+        val context = StyleContext()
+        val base = baseStyle(context)
+        val styles = DiffLineKind.entries.associateWith { kind -> styleFor(context, base, kind) }
+        val plainStyle = context.addStyle("plain", base).apply {
+            StyleConstants.setForeground(this, COLOR_PLAIN)
+        }
+        val doc = pane.styledDocument
+        insertLines(doc, text.split("\n"), base) { styles.getValue(DiffHighlight.classify(it)) }
+        if (plainBody != null) {
+            doc.insertString(doc.length, "\n\n", base)
+            insertLines(doc, plainBody.split("\n"), base) { plainStyle }
+        }
+    }
+
+    /**
+     * Fill [pane] with one file's own text: monospaced, one color for every line, and no line
+     * classified at all. That last part is the reason this is a separate renderer -- a file whose
+     * first line happens to start with a plus is not an edit somebody made, and coloring it as
+     * one would invent the very change the reader opened the window to check on.
+     */
+    private fun renderFile(pane: JTextPane, body: String) {
+        val context = StyleContext()
+        val base = baseStyle(context)
+        // The same near-white a patch uses for its file header, so a whole file reads in the one
+        // tone the patch view already reserves for text that is neither added nor removed.
+        val fileStyle = context.addStyle("file", base).apply {
+            StyleConstants.setForeground(this, COLOR_FILE_HEADER)
+        }
+        insertLines(pane.styledDocument, body.split("\n"), base) { fileStyle }
+    }
+
+    /** The monospaced base every other style in either view inherits. */
+    private fun baseStyle(context: StyleContext): Style =
+        context.addStyle("base", null).apply {
+            StyleConstants.setFontFamily(this, Font.MONOSPACED)
+            StyleConstants.setFontSize(this, 12)
+        }
+
+    /** Write [lines] to [doc], each under the style [styleOf] picks, separated by newlines. */
+    private fun insertLines(
+        doc: javax.swing.text.StyledDocument,
+        lines: List<String>,
+        base: Style,
+        styleOf: (String) -> Style
+    ) {
+        lines.forEachIndexed { index, line ->
+            doc.insertString(doc.length, line, styleOf(line))
+            if (index < lines.lastIndex) doc.insertString(doc.length, "\n", base)
+        }
+    }
+
+    /** The style for one kind, inheriting the monospaced base; context keeps the default color. */
+    private fun styleFor(context: StyleContext, base: Style, kind: DiffLineKind): Style {
+        val style = context.addStyle(kind.name, base)
+        when (kind) {
+            DiffLineKind.Added -> StyleConstants.setForeground(style, COLOR_ADDED)
+            DiffLineKind.Removed -> StyleConstants.setForeground(style, COLOR_REMOVED)
+            DiffLineKind.FileHeader -> {
+                StyleConstants.setForeground(style, COLOR_FILE_HEADER)
+                StyleConstants.setBold(style, true)
+            }
+            DiffLineKind.HunkHeader -> StyleConstants.setForeground(style, COLOR_HUNK_HEADER)
+            DiffLineKind.Meta -> StyleConstants.setForeground(style, COLOR_META)
+            DiffLineKind.Context -> Unit
+        }
+        return style
+    }
+
+    /**
+     * Put the dialog at the spot the user left it when a size was stored and that spot still
+     * lands on a screen; otherwise center it on [owner]. The stored size is the flag that a
+     * position exists at all, so a first open centers rather than jumping to the origin.
+     */
+    private fun place(
+        dialog: JDialog,
+        owner: Component,
+        x: Int,
+        y: Int,
+        w: Int,
+        h: Int
+    ) {
+        if (w <= 0 || h <= 0) {
+            dialog.setLocationRelativeTo(owner)
+            return
+        }
+        val saved = Rectangle(x, y, w, h)
+        val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+        if (screen.intersects(saved)) dialog.setLocation(x, y)
+        else dialog.setLocationRelativeTo(owner)
+    }
+
+    // GitHub-dark palette, chosen so each kind stays readable on the dark editor background.
+    private val COLOR_ADDED = Color(0x7E, 0xE7, 0x87)
+    private val COLOR_REMOVED = Color(0xFF, 0x7B, 0x72)
+    private val COLOR_FILE_HEADER = Color(0xE6, 0xED, 0xF3)
+    private val COLOR_HUNK_HEADER = Color(0x79, 0xC0, 0xFF)
+    private val COLOR_META = Color(0x8B, 0x94, 0x9E)
+    /** The gray of an aside: the same tone the chat renders reasoning in, so both read alike. */
+    private val COLOR_PLAIN = Color(150, 150, 150)
+
+    private const val DEFAULT_WIDTH = 560
+    private const val DEFAULT_HEIGHT = 360
+    private const val MIN_SIZE = 200
+}

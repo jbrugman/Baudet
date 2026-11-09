@@ -55,7 +55,7 @@ jobs:
       - name: Upload macOS app artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Mule-mac-app
+          name: Baudet-mac-app
           path: target/dist/
 
       - name: Publish GitHub release
@@ -64,14 +64,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-            target/dist/Mule.app/Contents/Info.plist)"
+            target/dist/Baudet.app/Contents/Info.plist)"
           TAG="v${VERSION}"
-          ZIP="Mule-${VERSION}-macos.zip"
-          ditto -c -k --sequesterRsrc --keepParent target/dist/Mule.app "$ZIP"
+          ZIP="Baudet-${VERSION}-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent target/dist/Baudet.app "$ZIP"
           # Offer the runnable jar too: the .app is ad-hoc signed, so a downloaded copy
           # is blocked by Gatekeeper -- the jar is the artifact that runs on any JVM.
-          SHADED_JAR="$(find target -maxdepth 1 -name 'mule-*.jar' ! -name 'original-*' | sort | head -n 1)"
-          JAR="Mule-${VERSION}.jar"
+          SHADED_JAR="$(find target -maxdepth 1 -name 'baudet-*.jar' ! -name 'original-*' | sort | head -n 1)"
+          JAR="Baudet-${VERSION}.jar"
           cp "$SHADED_JAR" "$JAR"
           NOTES="Assets: ${ZIP} (ad-hoc-signed .app; needs a Developer ID + notarization to open on another Mac) and ${JAR} (runnable jar; the portable artifact, run with java -jar ${JAR})."
           if gh release view "$TAG" >/dev/null 2>&1; then

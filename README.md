@@ -1,11 +1,41 @@
-# Mule
+# Baudet
 
 A local-first coding assistant: a desktop app (not a CLI) for talking to an
 LLM that runs on your own machine through an OpenAI-compatible API.
 
+## About
+
+**Baudet** is a local-first desktop assistant built to talk to local Large
+Language Models (served through APIs like [oMLX](https://github.com/jundot/omlx))
+without the sugarcoating.
+
+In French, a *baudet* is a donkey - the ultimate beast of burden. Where
+frontier-model clients assume cheap tokens, huge contexts and flawless tool
+calls, **Baudet** is built for the reality of local hardware. It treats your
+local model like a hardworking donkey: highly capable and industrious, but in
+need of the right harness to stay efficient, transparent and honest.
+
+The name is a layered inside joke and a working metaphor for local AI developers:
+
+- **The sound of IA**: in French, Artificial Intelligence is abbreviated
+  **IA** (pronounced *ee-yah*). Fittingly, *IA* - written *Hi-Han* - is the
+  onomatopoeia for a donkey's bray.
+- **The beast of burden**: local models do the heavy lifting on your own
+  machine. Baudet manages server-side sessions, tracks token metrics and
+  handles client-side compaction, so local inference is practical for
+  day-to-day work.
+- **Taming the stubborn donkey**: local backends are unpredictable - they
+  deviate from event names, invent budgets, or burn the context window on
+  reasoning before any answer. Like an experienced handler harnessing a clever
+  but stubborn donkey, Baudet enforces honest token accounting, isolates
+  reasoning tokens and absorbs parsing quirks without crashing.
+
+By dropping cloud-first assumptions and putting real telemetry on screen,
+Baudet lets you and your local model push through heavy workloads together.
+
 ## What this is
 
-Mule is a small desktop client for a model served locally, e.g. behind
+Baudet is a small desktop client for a model served locally, e.g. behind
 [oMLX](https://github.com/jundot/omlx) on `http://127.0.0.1:8000/v1`.
 That loopback address is the default; a server elsewhere is set in Settings and
 stored, not hardcoded.
@@ -34,7 +64,7 @@ concrete behavior:
   before the answer started" look identical otherwise, and only one of them is
   fixed by raising the budget.
 - **Reasoning output is kept.** Reasoning models spend most of a small budget
-  on the summary before any answer exists. Mule shows it separately and keeps
+  on the summary before any answer exists. Baudet shows it separately and keeps
   it out of the prompt.
 - **Tolerant parsing.** Local backends deviate from the documented event
   names. An unknown event is counted and sampled, never fatal, and the census
@@ -45,7 +75,7 @@ concrete behavior:
 
 The wire layer and the project tools work; the editor surface around them is still
 thin. The model can read a project file, apply a patch to one, query git read-only,
-and run a shell command it first has to ask you to approve — which is what tips Mule
+and run a shell command it first has to ask you to approve — which is what tips Baudet
 from a chat client toward a coding assistant.
 
 Working:
@@ -84,7 +114,10 @@ Working:
   red deleted (a ghost row when the file is gone from disk) — and double-clicking a
   file opens its git patch, colored so added lines read green and removed lines red;
   git here is read-only, it shows the change, it does not commit
-- the file tree watches its folder and refreshes itself when files change on disk, keeping the folders you had open and your selection in place, so the colors and the change list stay current while a model writes; the Refresh button still forces a full re-read
+- the file tree watches its folder and refreshes itself when files change on disk,
+  keeping the folders you had open and your selection in place, so the colors and
+  the change list stay current while a model writes; the Refresh button still
+  forces a full re-read
 
 Not there yet:
 
@@ -122,31 +155,34 @@ Or build the runnable jar (shaded, with `Main-Class` set) and run it with any
 `java` on your path:
 
 ```bash
-mvn -B package                                        # -> target/mule-<version>.jar
-java -jar target/mule-<version>.jar                   # the app
-java -jar target/mule-<version>.jar --smoke           # headless model-list check
+mvn -B package                                        # -> target/baudet-<version>.jar
+java -jar target/baudet-<version>.jar                   # the app
+java -jar target/baudet-<version>.jar --smoke           # headless model-list check
 ```
 
 The store location defaults to a per-user directory that does not depend on the
-working directory -- `~/Library/Application Support/Mule` on macOS, `%APPDATA%\Mule`
-on Windows, `$XDG_DATA_HOME/mule` on Linux -- so the packaged app still finds it
-writable when Finder launches it with cwd `/`. Override with `-Dmule.home=/some/dir`;
-`mvn exec:java` pins it to `./mule-data` so a dev run keeps its store checkout-local.
+working directory -- `~/Library/Application Support/Baudet` on macOS, `%APPDATA%\Baudet`
+on Windows, `$XDG_DATA_HOME/baudet` on Linux -- so the packaged app still finds it
+writable when Finder launches it with cwd `/`. Override with `-Dbaudet.home=/some/dir`;
+`mvn exec:java` pins it to `./baudet-data` so a dev run keeps its store
+checkout-local. Note that the 0.4.0 rename moved the store from the Mule
+location to Baudet, so an earlier pre-alpha store is not read and the app
+opens with a fresh database.
 
 ## Packaging (macOS)
 
-`jpackage` turns the shaded jar into a self-contained `Mule.app` with its own
+`jpackage` turns the shaded jar into a self-contained `Baudet.app` with its own
 bundled runtime. The icon is not a committed bitmap: the app draws it itself,
 and `--export-icons` writes the `.iconset` that `iconutil` compiles into the
 `.icns` -- so the mark is defined in exactly one place.
 
 ```bash
-mvn -B clean verify -Pmac-app          # -> target/dist/Mule.app
+mvn -B clean verify -Pmac-app          # -> target/dist/Baudet.app
 ```
 
 The `mac-app` profile runs `packaging/make-mac-app.sh` once the jar is built.
 That script exports the icon, compiles the `.icns`, and bundles the full default
-runtime. Set `MULE_PKG_TYPE=dmg` to also wrap the `.app` into a `.dmg`.
+runtime. Set `BAUDET_PKG_TYPE=dmg` to also wrap the `.app` into a `.dmg`.
 
 One honest wrinkle: `jpackage` refuses a version whose major number is `0`, so
 the bundle is built with a placeholder version and the real pre-release version
@@ -179,23 +215,23 @@ real desktop session is the last step and has not been captured headlessly.
 
 ### Launching the packaged app
 
-Two ways to start `Mule.app` from a shell:
+Two ways to start `Baudet.app` from a shell:
 
 ```bash
-open target/dist/Mule.app                     # normal launch (LaunchServices: Dock, icon)
-target/dist/Mule.app/Contents/MacOS/Mule      # direct: stdout/stderr and exit code stay in the shell
+open target/dist/Baudet.app                     # normal launch (LaunchServices: Dock, icon)
+target/dist/Baudet.app/Contents/MacOS/Baudet      # direct: stdout/stderr and exit code stay in the shell
 ```
 
 `open` is the double-click path; app output does not appear in the terminal.
-Arguments go through `--args`, e.g. `open target/dist/Mule.app --args --smoke`.
+Arguments go through `--args`, e.g. `open target/dist/Baudet.app --args --smoke`.
 The direct launcher boots the bundled runtime under `Contents/app`, so no local
 `java` or `JAVA_HOME` is needed -- handy for a headless run such as
-`target/dist/Mule.app/Contents/MacOS/Mule --export-icons=/tmp/mule-icons`.
+`target/dist/Baudet.app/Contents/MacOS/Baudet --export-icons=/tmp/baudet-icons`.
 
 The bundle is ad-hoc signed (see above). Built on the machine that runs it, jpackage
 applies an ad-hoc signature and it launches normally; a copy carried from another
 machine is quarantined by Gatekeeper until cleared with
-`xattr -dr com.apple.quarantine target/dist/Mule.app`, or opened once with
+`xattr -dr com.apple.quarantine target/dist/Baudet.app`, or opened once with
 right-click -> Open in Finder.
 
 ## Continuous integration
@@ -205,10 +241,10 @@ GitHub Actions, in `.github/workflows/`:
 - `java-maven-ci.yml` -- on every push and pull request to `main`: build and run
   the test suite with `mvn -B clean verify`.
 - `package-mac.yml` -- on push to `main`: build on `macos-latest`, run the same
-  `mac-app` packaging, and upload the resulting `Mule.app` as a build artifact.
+  `mac-app` packaging, and upload the resulting `Baudet.app` as a build artifact.
   The artifact is unsigned; downloading it and opening it locally is on you.
   A qualifying push also publishes a GitHub Release carrying two assets:
-  `Mule-<version>-macos.zip` (the ad-hoc-signed `.app`) and `Mule-<version>.jar`
+  `Baudet-<version>-macos.zip` (the ad-hoc-signed `.app`) and `Baudet-<version>.jar`
   (the runnable shaded jar -- the portable artifact that runs on any JVM, since
   the `.app` is not notarized and Gatekeeper blocks it on another Mac).
 

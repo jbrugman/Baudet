@@ -4,11 +4,11 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>dev.mule</groupId>
-  <artifactId>mule</artifactId>
-  <version>0.3.3-SNAPSHOT</version>
+  <groupId>dev.baudet</groupId>
+  <artifactId>baudet</artifactId>
+  <version>0.4.0-SNAPSHOT</version>
   <packaging>jar</packaging>
-  <name>mule</name>
+  <name>baudet</name>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -26,7 +26,7 @@
          any test framework never reaches the native binary. -->
     <kotest.version>6.2.6</kotest.version>
     <surefire.version>3.6.1</surefire.version>
-    <mainClass>dev.mule.MainKt</mainClass>
+    <mainClass>dev.baudet.MainKt</mainClass>
   </properties>
 
   <dependencies>
@@ -130,12 +130,12 @@
         <version>3.6.4</version>
         <configuration>
           <mainClass>${mainClass}</mainClass>
-          <!-- Dev runs keep the store checkout-local (./mule-data); the packaged
+          <!-- Dev runs keep the store checkout-local (./baudet-data); the packaged
                app resolves an absolute per-user directory instead. -->
           <systemProperties>
             <systemProperty>
-              <key>mule.home</key>
-              <value>${project.basedir}/mule-data</value>
+              <key>baudet.home</key>
+              <value>${project.basedir}/baudet-data</value>
             </systemProperty>
           </systemProperties>
         </configuration>
@@ -173,7 +173,7 @@
   </build>
 
   <profiles>
-    <!-- Produces target/dist/Mule.app from the shaded jar. Bound to verify, not
+    <!-- Produces target/dist/Baudet.app from the shaded jar. Bound to verify, not
          package, so the shade step has already produced the jar and the profile
          never re-enters Maven (the script greps the version from the pom itself).
          macOS only: jpackage and iconutil are not present on other platforms. -->
