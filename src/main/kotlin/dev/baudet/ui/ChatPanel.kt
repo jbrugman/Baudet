@@ -193,16 +193,18 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     var onSessionsChanged: () -> Unit = {}
 
     init {
-        // Send, New session and Compact share a wrapping left group; Stop is pinned to the far
-        // right so the one action that abandons a turn never hides among the others. The left
-        // group still wraps, and the scroll/status fields drop their default (== preferred)
-        // minimum, so a narrow chat no longer holds the sidebar divider hostage.
+        // Send, New session and Compact share a wrapping group that takes the leftover width;
+        // Stop is pinned to the far right so the one action that abandons a turn never hides
+        // among the others. Center, not West, matters here: a West slot only offers the group
+        // its own preferred width, which makes the wrapper drop the last button onto a second
+        // row that the single-row toolbar band then clips out of sight. The scroll/status fields
+        // still drop their default (== preferred) minimum, so a narrow chat stays resizable.
         val leftGroup = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
         leftGroup.add(sendButton)
         leftGroup.add(newSessionButton)
         leftGroup.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
         val buttons = JPanel(BorderLayout())
-        buttons.add(leftGroup, BorderLayout.WEST)
+        buttons.add(leftGroup, BorderLayout.CENTER)
         buttons.add(stopButton, BorderLayout.EAST)
 
         // A JTextArea sized by rows reports its preferred height before the frame is shown, so
