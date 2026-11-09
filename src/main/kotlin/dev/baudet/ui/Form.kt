@@ -7,6 +7,8 @@ import java.awt.Insets
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextArea
 
 /** Plain form: label on the left, field on the right, fields stretch. */
 fun formPanel(rows: List<Pair<String, JComponent>>, gap: Int = 6): JPanel {
@@ -41,4 +43,22 @@ fun formPanel(rows: List<Pair<String, JComponent>>, gap: Int = 6): JPanel {
     filler.preferredSize = Dimension(1, 1)
     p.add(filler, c)
     return p
+}
+
+/**
+ * A multi-line field that keeps the height it was declared with. A text area outside a
+ * viewport asks for as much vertical space as its content holds, so a long system prompt
+ * stretched its own row past the bottom of the window and took the buttons below it out of
+ * sight. Inside a viewport the declared rows become the visible window and the remainder
+ * scrolls, which is the only way the rest of the form stays reachable.
+ */
+fun scrollingField(field: JTextArea): JScrollPane {
+    val scroll = JScrollPane(field)
+    // The field wraps its own lines, so a horizontal bar would only claim a width the text
+    // never actually needs.
+    scroll.horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+    // The form mirrors the hint onto the caption from the component it adds, and that is now
+    // the wrapper, so the hint has to ride along with it.
+    field.toolTipText?.takeIf { it.isNotBlank() }?.let { scroll.toolTipText = it }
+    return scroll
 }

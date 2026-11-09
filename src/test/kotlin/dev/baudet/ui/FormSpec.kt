@@ -6,6 +6,8 @@ import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextArea
 import javax.swing.JTextField
 
 /**
@@ -48,6 +50,53 @@ class FormSpec : BehaviorSpec({
         `when`("the form is built") {
             then("the caption is left alone") {
                 captionAt(form, 0).toolTipText shouldBe null
+            }
+        }
+    }
+
+    given("a multi-line field handed to a row") {
+        val area = JTextArea(5, 20).apply {
+            lineWrap = true
+            wrapStyleWord = true
+            toolTipText = "Leave blank for the built-in default."
+        }
+        val row = scrollingField(area)
+        val form = formPanel(listOf("system prompt" to row))
+        val declaredHeight = row.preferredSize.height
+
+        `when`("the form is built") {
+            then("the row is a viewport holding the field") {
+                fieldAt(form, 0) shouldBe row
+                row.viewport.view shouldBe area
+            }
+            then("the caption carries the hint of the field living inside the viewport") {
+                captionAt(form, 0).toolTipText shouldBe "Leave blank for the built-in default."
+            }
+            then("the field keeps its own hint as well") {
+                area.toolTipText shouldBe "Leave blank for the built-in default."
+            }
+        }
+    }
+
+    given("a prompt that grew past the visible rows") {
+        val area = JTextArea(5, 20).apply { lineWrap = true; wrapStyleWord = true }
+        val row = scrollingField(area)
+        val declaredHeight = row.preferredSize.height
+        // Long enough to overflow: this is the state that used to push the rows below it,
+        // and the buttons under the form, past the bottom edge of the window.
+        area.text = (1..200).joinToString(" ") { "word$it" }
+        row.setBounds(0, 0, 260, declaredHeight)
+        row.doLayout()
+
+        `when`("the text is measured again") {
+            then("the row holds the height it was declared with instead of stretching") {
+                row.preferredSize.height shouldBe declaredHeight
+            }
+            then("the surplus scrolls inside the row") {
+                (row.verticalScrollBar.model.maximum > 0) shouldBe true
+            }
+            then("no horizontal bar claims width the wrapped text never needs") {
+                row.horizontalScrollBarPolicy shouldBe JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
             }
         }
     }

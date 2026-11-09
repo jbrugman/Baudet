@@ -95,7 +95,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 "" to storeResp,
                 "" to useServerSession,
                 "" to autoApproveSafe,
-                Texts[Key.SystemPromptLabel] to systemPrompt
+                // Wrapped, so the prompt scrolls inside its own 5 rows instead of asking the
+                // form for the height of every line it holds.
+                Texts[Key.SystemPromptLabel] to scrollingField(systemPrompt)
             )
         )
 
