@@ -1,5 +1,6 @@
 package dev.mule.tool
 
+import dev.mule.config.ContextStrategy
 import dev.mule.session.Msg
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
@@ -110,4 +111,46 @@ class TranscriptSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a tool loop whose transcript grows past the configured budget") {
+        // A round trip appends an assistant turn and a tool observation. With a budget far below
+        // the transcript the loop must cap every request to that budget, not let the later ones
+        // fall back to the fixed replay ceiling -- the defect the loop used to carry.
+        val budgetTokens = 2_000L
+        fun growing(rounds: Int): List<Msg> = buildList {
+            add(Msg("user", "the prompt"))
+            repeat(rounds) { i ->
+                add(Msg("assistant", "ans$i-" + "y".repeat(1_200)))
+                add(Msg("user", "obs$i-" + "x".repeat(1_200)))
+            }
+        }
+        val history = growing(12)
+        fun charCost(list: List<Msg>): Int = list.sumOf { it.content.length + it.role.length + 8 }
+        `when`("splitting one request under a rolling window") {
+            val (prior, userText) = Transcript.forLoop(
+                history, ContextStrategy.RollingWindow, budgetTokens, underServerSession = false
+            )
+            then("the newest observation is the current input, so it is never dropped") {
+                userText shouldBe "obs11-" + "x".repeat(1_200)
+            }
+            then("the replayed prior is bounded to the budget, not the fixed 48k ceiling") {
+                (charCost(prior) < 10_000) shouldBe true
+            }
+            then("a note stands in for the older turns trimmed out of this request") {
+                (prior.any { it.content.startsWith("[") && it.content.endsWith("]") }) shouldBe true
+            }
+        }
+        `when`("splitting the same transcript under StopAtLimit") {
+            then("the budget is ignored, so the whole transcript reaches the fixed clamp instead") {
+                val (stopPrior, _) = Transcript.forLoop(
+                    history, ContextStrategy.StopAtLimit, budgetTokens, underServerSession = false
+                )
+                val (trimPrior, _) = Transcript.forLoop(
+                    history, ContextStrategy.RollingWindow, budgetTokens, underServerSession = false
+                )
+                (charCost(stopPrior) > charCost(trimPrior)) shouldBe true
+            }
+        }
+    }
+
 })

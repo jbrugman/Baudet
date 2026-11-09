@@ -309,8 +309,9 @@ class AppState(val store: H2Store) {
      * edited, so what the user reads in the panel stays whole.
      */
     private fun outbound(s: SessionState, shrinkPct: Int): List<Msg> =
-        if (config.contextStrategy == ContextStrategy.StopAtLimit) s.promptHistory()
-        else ContextTrimmer.trim(s.promptHistory(), config.contextStrategy, trimBudgetTokens(shrinkPct))
+        ContextTrimmer.bound(
+            s.promptHistory(), config.contextStrategy, trimBudgetTokens(shrinkPct)
+        )
 
     /** The server chain id to reuse for one turn, or null to replay from the client instead. Trimming
      *  always replays, because editing what we send cannot shrink a chain the backend already holds. */
@@ -539,7 +540,13 @@ class AppState(val store: H2Store) {
         }
         val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
         val loop = ToolLoop(
-            turnSource = ResponsesTurnSource(ResponsesClient(config), system),
+            // The source is given the same strategy and budget this turn opened with, so every
+            // request the loop fires -- not only the first -- is capped to the configured budget
+            // as tool observations accumulate.
+            turnSource = ResponsesTurnSource(
+                ResponsesClient(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct)
+            ),
+
             registry = ToolRegistry(tools),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,

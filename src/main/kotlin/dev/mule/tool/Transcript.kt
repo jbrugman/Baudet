@@ -1,5 +1,7 @@
 package dev.mule.tool
 
+import dev.mule.config.ContextStrategy
+import dev.mule.session.ContextTrimmer
 import dev.mule.session.Msg
 
 /**
@@ -28,6 +30,30 @@ object Transcript {
 
     /** Removes leaked control tokens from any text; leaves ordinary prose untouched. */
     fun scrub(text: String): String = special.replace(text, "")
+
+    /**
+     * Split a running tool-loop transcript for one request, bounded by the caller's context
+     * policy so the SAME budget that opened the turn caps every later request too, not a fixed
+     * ceiling. A tool loop appends one or more observations each round trip, so without this the
+     * later requests would fall back to the fixed [forCall] clamp and ignore the budget the user
+     * set. Under [ContextStrategy.StopAtLimit] the transcript goes whole and the fixed clamp still
+     * holds, with [underServerSession] deciding the current input; under a trimming strategy the
+     * window is bounded by [ContextTrimmer] first and then split without that clamp, so trimming
+     * decides the size. The newest message is the current input whenever the loop replays client
+     * side, which is what it does under a trimming strategy.
+     */
+    fun forLoop(
+        history: List<Msg>,
+        strategy: ContextStrategy,
+        budgetTokens: Long,
+        underServerSession: Boolean
+    ): Pair<List<Msg>, String> {
+        if (strategy == ContextStrategy.StopAtLimit) {
+            val (prior, _) = forCall(history)
+            return prior to currentInput(history, underServerSession)
+        }
+        return splitForWindow(ContextTrimmer.bound(history, strategy, budgetTokens))
+    }
 
     /** @return the sanitized prior messages to replay, and the current user input. */
     fun forCall(history: List<Msg>): Pair<List<Msg>, String> {

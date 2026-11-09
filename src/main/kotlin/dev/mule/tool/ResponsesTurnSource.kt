@@ -2,6 +2,7 @@ package dev.mule.tool
 
 import dev.mule.api.ResponsesClient
 import dev.mule.api.Turn
+import dev.mule.config.ContextStrategy
 import dev.mule.session.Msg
 
 /**
@@ -14,7 +15,15 @@ import dev.mule.session.Msg
  */
 class ResponsesTurnSource(
     private val client: ResponsesClient,
-    private val system: String
+    private val system: String,
+    /**
+     * The caller's context policy, handed down so every turn this source builds is bounded by the
+     * same budget that opened the turn rather than by the fixed replay ceiling alone. The default
+     * keeps a directly-built source (and the tests) on the original whole-transcript path.
+     */
+    private val strategy: ContextStrategy = ContextStrategy.StopAtLimit,
+    /** The token budget the window trims to; 0 means the window is unknown, which leaves it whole. */
+    private val budgetTokens: Long = 0L
 ) : TurnSource {
 
     override fun nextTurn(
@@ -24,8 +33,11 @@ class ResponsesTurnSource(
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
-        val (prior, _) = Transcript.forCall(history)
-        val userText = Transcript.currentInput(history, previousResponseId != null)
+        // Bounded by the same policy that opened the turn: under a trimming strategy this caps each
+        // request to the budget as observations pile up, not just the first one.
+        val (prior, userText) = Transcript.forLoop(
+            history, strategy, budgetTokens, underServerSession = previousResponseId != null
+        )
         return client.turn(system, prior, userText, previousResponseId, tools, onDelta, onReasoning)
     }
 }

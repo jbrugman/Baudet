@@ -20,19 +20,34 @@ import dev.mule.config.ContextStrategy
 object ContextTrimmer {
 
     /**
-     * The newest-window view of [history] that fits [budgetTokens]. A non-positive budget means the
-     * window is unknown, so nothing is invented and [history] is returned untouched. When there is
-     * nothing to remove the list is returned unchanged -- in particular no placeholder note is added.
+     * The window [strategy] asks for: the whole [history] under [ContextStrategy.StopAtLimit] --
+     * the guard refused anything oversized before it could reach here -- otherwise the bounded
+     * window from [trim]. This is the single place the whole-versus-trimmed choice lives, so the
+     * one-shot turn and the tool loop cannot disagree about how large a request may be.
      */
+    fun bound(history: List<Msg>, strategy: ContextStrategy, budgetTokens: Long): List<Msg> =
+        if (strategy == ContextStrategy.StopAtLimit) history
+        else trim(history, strategy, budgetTokens)
+
     fun trim(history: List<Msg>, strategy: ContextStrategy, budgetTokens: Long): List<Msg> {
-        if (history.size <= 1 || budgetTokens <= 0L) return history
+        if (budgetTokens <= 0L || history.isEmpty()) return history
+        val budgetChars = budgetTokens * 3L
         val last = history.last()
+        val lastCost = costChars(last)
+        // The newest turn is what the model has to react to, so it is always sent -- but never whole
+        // when it alone busts the window. A single oversized tool observation kept in full would blow
+        // the request it is the only content of, which trimming is meant to prevent; so it is clamped
+        // to a head slice that fits, and the earlier turns drop, since the oversized turn already
+        // fills the window. Truncating one observation is safe where dropping a whole turn is not: it
+        // goes out labelled as incomplete, so the model knows the tail is missing.
+        if (lastCost > budgetChars) return listOf(clampToWindow(last, budgetChars))
         val prior = history.dropLast(1)
-        val budgetChars = budgetTokens * 3L - costChars(last)
-        if (budgetChars <= 0L) return listOf(last)
+        // A single message that already fits is the whole window, so there is nothing older to keep.
+        if (prior.isEmpty()) return listOf(last)
+        val room = budgetChars - lastCost
         val kept = when (strategy) {
-            ContextStrategy.RollingWindow -> rolling(prior, budgetChars)
-            ContextStrategy.TruncateAtMiddle -> anchored(prior, budgetChars)
+            ContextStrategy.RollingWindow -> rolling(prior, room)
+            ContextStrategy.TruncateAtMiddle -> anchored(prior, room)
             ContextStrategy.StopAtLimit -> prior
         }
         return kept + last
@@ -75,6 +90,20 @@ object ContextTrimmer {
         return out
     }
 
+    /**
+     * [msg] cut from the front to a content length whose whole cost fits [budgetChars], with a
+     * model-facing note appended. The note length is reserved in the arithmetic, so a message that
+     * was larger than the window comes back costing exactly the window. Under a window smaller than
+     * the note alone the note is all that can go out, which still tells the model honestly that what
+     * it sees is only the start of the turn.
+     */
+    private fun clampToWindow(msg: Msg, budgetChars: Long): Msg {
+        val room = (budgetChars - msg.role.length - 8L - TRUNCATION_NOTE.length)
+            .coerceAtLeast(0L)
+            .toInt()
+        return msg.copy(content = msg.content.take(room) + TRUNCATION_NOTE)
+    }
+
     // Model-facing, so English whatever the UI speaks: this text goes into the prompt.
     private fun note(dropped: Int): Msg = Msg(
         "user",
@@ -83,4 +112,8 @@ object ContextTrimmer {
     )
 
     private fun costChars(m: Msg): Long = m.content.length + m.role.length + 8L
+
+    /** Appended to a turn clamped by [clampToWindow]; the room it occupies is reserved before cutting. */
+    private const val TRUNCATION_NOTE =
+        "\n\n[... this message was truncated to fit the model's context window ...]"
 }
