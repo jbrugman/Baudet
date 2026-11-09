@@ -394,17 +394,20 @@ class AppState(val store: H2Store) {
             approveCommand = approveCommand,
             readGranted = readGranted
         )
-        // The wire format is model-facing, so it joins the English system prompt only
-        // when tools are live; a plain or tool-less turn never mentions it.
-        val system = instructionsFor(s) + "\n\n" + CallExtractor.PROTOCOL
+        // Build the enabled tools once, then advertise exactly those in the prompt: the registry
+        // and the system prompt must name the same set, or the model is taught to call a tool it
+        // does not have, or kept blind to one it does. The wire format is model-facing, so it joins
+        // the English system prompt only when tools are live; a plain or tool-less turn never sees it.
+        val tools = buildList {
+            add(ReadFileTool())
+            if (writable) add(EditFileTool())
+            if (executable) add(ExecuteTool())
+            if (readGranted) add(GitTool())
+        }
+        val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
         val loop = ToolLoop(
             turnSource = ResponsesTurnSource(ResponsesClient(config), system),
-            registry = ToolRegistry(buildList {
-                add(ReadFileTool())
-                if (writable) add(EditFileTool())
-                if (executable) add(ExecuteTool())
-                if (readGranted) add(GitTool())
-            }),
+            registry = ToolRegistry(tools),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
             chainResponseId = config.useServerSession && s.previousResponseId != null,
