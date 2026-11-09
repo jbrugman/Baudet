@@ -53,6 +53,35 @@ class AppConfigSpec : BehaviorSpec({
         }
     }
 
+    /*
+     * TruncateAtMiddle was retired as a context strategy. A build that stored it keeps that string
+     * in its saved blob, and [dev.baudet.store.H2Store.load] resets EVERY setting to default on any
+     * decode failure -- so without coercion the whole config, base url, key and model included,
+     * would be wiped on the first launch after the upgrade. The Json layer sets coerceInputValues,
+     * so a retired enum value reverts to the new default and the rest of the blob rides along.
+     */
+    given("a settings blob that stored a now-retired context strategy") {
+        val blob = """{"baseUrl":"http://h:1/v1","model":"m","apiKey":"k",""" +
+            """"contextStrategy":"TruncateAtMiddle","contextBudgetTokens":42}"""
+
+        `when`("reading it back") {
+            val back = json.decodeFromString(AppConfig.serializer(), blob)
+
+            then("the retired value coerces to the new default rather than failing the load") {
+                back.contextStrategy shouldBe ContextStrategy.RecentMessages
+            }
+            then("the rest of the stored configuration survives, not reset to defaults") {
+                back.baseUrl shouldBe "http://h:1/v1"
+                back.apiKey shouldBe "k"
+                back.model shouldBe "m"
+                back.contextBudgetTokens shouldBe 42
+            }
+            then("a field the old blob never had falls back to its default count") {
+                back.contextKeepRecentMessages shouldBe 15
+            }
+        }
+    }
+
     given("the resolved key of a default config") {
         `when`("round-tripping through the stored form") {
             val cfg = AppConfig(baseUrl = "http://h:1/v1", apiKey = "k", topP = null)
@@ -66,7 +95,7 @@ class AppConfigSpec : BehaviorSpec({
                 back.topP shouldBe null
             }
             then("the context strategy survives the round-trip") {
-                back.contextStrategy shouldBe ContextStrategy.TruncateAtMiddle
+                back.contextStrategy shouldBe ContextStrategy.RecentMessages
             }
         }
     }
@@ -98,8 +127,9 @@ class AppConfigSpec : BehaviorSpec({
                 cfg.toolMode shouldBe ToolMode.Ask
                 cfg.maxToolIterations shouldBe 8
             }
-            then("context defaults to the automatic trim, with output room left to the server") {
-                cfg.contextStrategy shouldBe ContextStrategy.TruncateAtMiddle
+            then("context defaults to keep-last-turns, with output room left to the server") {
+                cfg.contextStrategy shouldBe ContextStrategy.RecentMessages
+                cfg.contextKeepRecentMessages shouldBe 15
                 cfg.maxOutputTokens shouldBe 0
             }
         }

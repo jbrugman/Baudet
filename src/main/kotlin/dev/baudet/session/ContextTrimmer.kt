@@ -7,11 +7,15 @@ import dev.baudet.config.ContextStrategy
  * transcript. This is the LMStudio idea: the history the user sees stays whole, and only the copy
  * that goes over the wire is cut so it fits the model.
  *
- * Two shapes, chosen by [ContextStrategy]:
- *  - [ContextStrategy.TruncateAtMiddle] keeps the oldest turn as an anchor and the newest turns, and
- *    removes what is between them. That preserves how the conversation started while keeping the
- *    context it needs to answer now.
- *  - [ContextStrategy.RollingWindow] keeps only the newest contiguous tail.
+ * Two trimming shapes, chosen by [ContextStrategy], plus a refusal:
+ *  - [ContextStrategy.RecentMessages] keeps only the last [trim] window -- the newest turn plus the
+ *    [keepRecent] turns before it -- then fits that tail to the budget. Sending the whole recent
+ *    exchange, rather than a pinned oldest turn with the middle missing, is what keeps a local model
+ *    on task instead of drifting back to a subject the conversation already left.
+ *  - [ContextStrategy.RollingWindow] fills the window as full as the budget allows and rolls the
+ *    oldest turns off the front, keeping the newest contiguous tail.
+ *  - [ContextStrategy.StopAtLimit] is left whole here; the guard refused anything oversized before it
+ *    could reach this code.
  *
  * The current turn -- the last message -- is always kept, and the system prompt cannot be lost
  * because it never lives in this list: it rides in the instructions of the request. Cost per message
@@ -20,37 +24,61 @@ import dev.baudet.config.ContextStrategy
 object ContextTrimmer {
 
     /**
-     * The window [strategy] asks for: the whole [history] under [ContextStrategy.StopAtLimit] --
-     * the guard refused anything oversized before it could reach here -- otherwise the bounded
-     * window from [trim]. This is the single place the whole-versus-trimmed choice lives, so the
-     * one-shot turn and the tool loop cannot disagree about how large a request may be.
+     * The window [strategy] asks for: the whole [history] under [ContextStrategy.StopAtLimit] -- the
+     * guard refused anything oversized before it could reach here -- otherwise the bounded window from
+     * [trim]. This is the single place the whole-versus-trimmed choice lives, so the one-shot turn and
+     * the tool loop cannot disagree about how large a request may be. [keepRecent] is the number of
+     * turns [ContextStrategy.RecentMessages] keeps; it is ignored by the other strategies.
      */
-    fun bound(history: List<Msg>, strategy: ContextStrategy, budgetTokens: Long): List<Msg> =
+    fun bound(
+        history: List<Msg>,
+        strategy: ContextStrategy,
+        budgetTokens: Long,
+        keepRecent: Int = Int.MAX_VALUE
+    ): List<Msg> =
         if (strategy == ContextStrategy.StopAtLimit) history
-        else trim(history, strategy, budgetTokens)
+        else trim(history, strategy, budgetTokens, keepRecent)
 
-    fun trim(history: List<Msg>, strategy: ContextStrategy, budgetTokens: Long): List<Msg> {
+    fun trim(
+        history: List<Msg>,
+        strategy: ContextStrategy,
+        budgetTokens: Long,
+        keepRecent: Int = Int.MAX_VALUE
+    ): List<Msg> {
         if (budgetTokens <= 0L || history.isEmpty()) return history
         val budgetChars = budgetTokens * 3L
-        val last = history.last()
+        // RecentMessages caps how far back the window reaches by count; RollingWindow reaches as far
+        // as the budget allows. Both then fit the chosen window to the token budget the same way.
+        val window = when (strategy) {
+            ContextStrategy.RecentMessages -> lastN(history, keepRecent)
+            ContextStrategy.RollingWindow -> history
+            ContextStrategy.StopAtLimit -> return history
+        }
+        return fit(window, budgetChars)
+    }
+
+    /** The last [keepRecent] messages, at least one, or the whole list when it is already that short. */
+    private fun lastN(history: List<Msg>, keepRecent: Int): List<Msg> =
+        if (keepRecent in 1 until history.size) history.takeLast(keepRecent) else history
+
+    /**
+     * [window] reduced to what fits [budgetChars]: the newest turn always goes, older turns roll off
+     * the front, and a single oversized newest turn is clamped rather than dropped so the request the
+     * model must react to is never lost.
+     *
+     * A single message that alone busts the window is kept as a head slice that fits and labelled as
+     * incomplete: truncating one observation is safe where dropping the whole turn the model has to
+     * react to is not, and the earlier turns fall away because that oversized turn fills the window.
+     */
+    private fun fit(window: List<Msg>, budgetChars: Long): List<Msg> {
+        val last = window.last()
         val lastCost = costChars(last)
-        // The newest turn is what the model has to react to, so it is always sent -- but never whole
-        // when it alone busts the window. A single oversized tool observation kept in full would blow
-        // the request it is the only content of, which trimming is meant to prevent; so it is clamped
-        // to a head slice that fits, and the earlier turns drop, since the oversized turn already
-        // fills the window. Truncating one observation is safe where dropping a whole turn is not: it
-        // goes out labelled as incomplete, so the model knows the tail is missing.
         if (lastCost > budgetChars) return listOf(clampToWindow(last, budgetChars))
-        val prior = history.dropLast(1)
+        val prior = window.dropLast(1)
         // A single message that already fits is the whole window, so there is nothing older to keep.
         if (prior.isEmpty()) return listOf(last)
         val room = budgetChars - lastCost
-        val kept = when (strategy) {
-            ContextStrategy.RollingWindow -> rolling(prior, room)
-            ContextStrategy.TruncateAtMiddle -> anchored(prior, room)
-            ContextStrategy.StopAtLimit -> prior
-        }
-        return kept + last
+        return rolling(prior, room) + last
     }
 
     /** The newest contiguous tail that fits, oldest first, with a note standing in for what fell off. */
@@ -64,30 +92,6 @@ object ContextTrimmer {
             first--
         }
         return if (first == 0) prior else listOf(note(first)) + prior.subList(first, prior.size)
-    }
-
-    /** The first turn plus the newest tail, with the middle removed; the anchor is dropped if too big. */
-    private fun anchored(prior: List<Msg>, budgetChars: Long): List<Msg> {
-        var anchorCount = 0
-        var used = 0L
-        if (costChars(prior[0]) <= budgetChars / 2) {
-            anchorCount = 1
-            used = costChars(prior[0])
-        }
-        var tailStart = prior.size
-        var tailUsed = 0L
-        while (tailStart > anchorCount) {
-            val c = costChars(prior[tailStart - 1])
-            if (used + tailUsed + c > budgetChars) break
-            tailUsed += c
-            tailStart--
-        }
-        val dropped = tailStart - anchorCount
-        val out = ArrayList<Msg>(prior.size + 1)
-        repeat(anchorCount) { out.add(prior[it]) }
-        if (dropped > 0) out.add(note(dropped))
-        out.addAll(prior.subList(tailStart, prior.size))
-        return out
     }
 
     /**

@@ -40,9 +40,18 @@ data class AppConfig(
     var contextBudgetTokens: Int = 0,
     /**
      * What the app does when a conversation reaches that ceiling. Trimming is the default so a long
-     * conversation simply keeps going instead of being refused; see [ContextStrategy].
+     * conversation simply keeps going instead of being refused; see [ContextStrategy]. The stored
+     * default is the keep-last-N window: a recent, contiguous tail is the arrangement that keeps a
+     * local model on task without dragging in subjects the conversation already left.
      */
-    var contextStrategy: ContextStrategy = ContextStrategy.TruncateAtMiddle,
+    var contextStrategy: ContextStrategy = ContextStrategy.RecentMessages,
+    /**
+     * For [ContextStrategy.RecentMessages], how many turns before the current one are sent back on
+     * each request. The system prompt is always sent first regardless of this number, so a small
+     * value still keeps the assistant's standing instructions. The current turn always goes, so a
+     * value of 1 sends only the newest turn. Minimum 1; anything else is rejected in Settings.
+     */
+    var contextKeepRecentMessages: Int = 15,
     var temperature: Double = 0.7,
     var topP: Double? = null,
     /** null = do not send. Values like minimal|low|medium|high, model dependent. */

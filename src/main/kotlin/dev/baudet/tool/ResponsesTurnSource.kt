@@ -23,7 +23,9 @@ class ResponsesTurnSource(
      */
     private val strategy: ContextStrategy = ContextStrategy.StopAtLimit,
     /** The token budget the window trims to; 0 means the window is unknown, which leaves it whole. */
-    private val budgetTokens: Long = 0L
+    private val budgetTokens: Long = 0L,
+    /** Turns before the current one that keep-last-N sends back; ignored by the other strategies. */
+    private val keepRecent: Int = Int.MAX_VALUE
 ) : TurnSource {
 
     override fun nextTurn(
@@ -36,7 +38,8 @@ class ResponsesTurnSource(
         // Bounded by the same policy that opened the turn: under a trimming strategy this caps each
         // request to the budget as observations pile up, not just the first one.
         val (prior, userText) = Transcript.forLoop(
-            history, strategy, budgetTokens, underServerSession = previousResponseId != null
+            history, strategy, budgetTokens,
+            underServerSession = previousResponseId != null, keepRecent = keepRecent
         )
         return client.turn(system, prior, userText, previousResponseId, tools, onDelta, onReasoning)
     }

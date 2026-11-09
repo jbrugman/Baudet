@@ -201,10 +201,10 @@ class AppStateSpec : BehaviorSpec({
      * Only StopAtLimit refuses, so a refusal must not appear under the other two.
      */
     given("a large conversation under an automatic strategy") {
-        `when`("the strategy trims the middle") {
+        `when`("the strategy keeps the last turns") {
             val state = freshState()
             state.saveConfig(state.config.copy(
-                contextBudgetTokens = 100, contextStrategy = ContextStrategy.TruncateAtMiddle
+                contextBudgetTokens = 100, contextStrategy = ContextStrategy.RecentMessages
             ))
             state.session.messages.add(Msg("user", "a".repeat(400_000)))
             then("the guard never bothers") { state.contextGuard() shouldBe null }

@@ -46,13 +46,14 @@ object Transcript {
         history: List<Msg>,
         strategy: ContextStrategy,
         budgetTokens: Long,
-        underServerSession: Boolean
+        underServerSession: Boolean,
+        keepRecent: Int = Int.MAX_VALUE
     ): Pair<List<Msg>, String> {
         if (strategy == ContextStrategy.StopAtLimit) {
             val (prior, _) = forCall(history)
             return prior to currentInput(history, underServerSession)
         }
-        return splitForWindow(ContextTrimmer.bound(history, strategy, budgetTokens))
+        return splitForWindow(ContextTrimmer.bound(history, strategy, budgetTokens, keepRecent))
     }
 
     /** @return the sanitized prior messages to replay, and the current user input. */

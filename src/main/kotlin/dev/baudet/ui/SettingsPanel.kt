@@ -29,8 +29,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val maxTokens = JTextField(8)
     private val contextBudget = JTextField(10)
     private val contextStrategy = JComboBox(
-        arrayOf(Texts[Key.StrategyTruncate], Texts[Key.StrategyRolling], Texts[Key.StrategyStop])
+        arrayOf(Texts[Key.StrategyRecent], Texts[Key.StrategyRolling], Texts[Key.StrategyStop])
     )
+    private val keepRecent = JTextField(6)
     private val temperature = JTextField(8)
     private val topP = JTextField(8)
     private val reasoning = JComboBox(arrayOf("", "minimal", "low", "medium", "high"))
@@ -64,6 +65,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxTokens.toolTipText = Texts[Key.TipMaxTokens]
         contextBudget.toolTipText = Texts[Key.TipContextBudget]
         contextStrategy.toolTipText = Texts[Key.TipContextStrategy]
+        keepRecent.toolTipText = Texts[Key.TipKeepRecent]
         temperature.toolTipText = Texts[Key.TipTemperature]
         topP.toolTipText = Texts[Key.TipTopP]
         reasoning.toolTipText = Texts[Key.TipReasoning]
@@ -83,6 +85,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 Texts[Key.MaxTokensLabel] to maxTokens,
                 Texts[Key.ContextBudgetLabel] to contextBudget,
                 Texts[Key.ContextStrategyLabel] to contextStrategy,
+                Texts[Key.KeepRecentLabel] to keepRecent,
                 Texts[Key.TemperatureLabel] to temperature,
                 Texts[Key.TopPLabel] to topP,
                 Texts[Key.ReasoningEffortLabel] to reasoning,
@@ -128,6 +131,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxTokens.text = c.maxOutputTokens.toString()
         contextBudget.text = c.contextBudgetTokens.toString()
         contextStrategy.selectedIndex = c.contextStrategy.ordinal
+        keepRecent.text = c.contextKeepRecentMessages.toString()
         temperature.text = c.temperature.toString()
         topP.text = c.topP?.toString() ?: ""
         reasoning.selectedItem = (c.reasoningEffort ?: "")
@@ -159,6 +163,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         if (mt == null || mt < 0) { fail(Texts[Key.ErrMaxTokens]); return null }
         val cb = contextBudget.text.trim().toIntOrNull()
         if (cb == null || cb < 0) { fail(Texts[Key.ErrContextBudget]); return null }
+        // One turn is the floor: keep-last-N must always be able to send the current turn.
+        val kr = keepRecent.text.trim().toIntOrNull()
+        if (kr == null || kr < 1) { fail(Texts[Key.ErrKeepRecent]); return null }
         val temp = temperature.text.trim().toDoubleOrNull()
         if (temp == null || temp < 0.0 || temp > 2.0) { fail(Texts[Key.ErrTemperature]); return null }
         val tp = topP.text.trim()
@@ -181,6 +188,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             maxOutputTokens = mt,
             contextBudgetTokens = cb,
             contextStrategy = ContextStrategy.entries[contextStrategy.selectedIndex],
+            contextKeepRecentMessages = kr,
             temperature = temp,
             topP = tpVal,
             reasoningEffort = reasoning.selectedItem?.toString()?.takeIf { it.isNotBlank() },

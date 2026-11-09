@@ -299,8 +299,27 @@ class AppState(val store: H2Store) {
      * retry so each attempt reaches for a smaller window than the one the backend just refused. It is
      * 0 when no window is known, which [ContextTrimmer] reads as leave the conversation alone.
      */
-    private fun trimBudgetTokens(shrinkPct: Int): Long =
-        (foldCeilingTokens() * shrinkPct / 100).toLong()
+    private fun trimBudgetTokens(shrinkPct: Int): Long {
+        // The rolling strategy is asked to give as much as the model can carry, so it fills toward a
+        // larger slice of the window than the fold; keep-last-N is capped by its own count anyway and
+        // keeps the conservative fold.
+        val ceiling = if (config.contextStrategy == ContextStrategy.RollingWindow)
+            rollingCeilingTokens() else foldCeilingTokens()
+        return (ceiling * shrinkPct / 100).toLong()
+    }
+
+    /**
+     * The ceiling the rolling window fills toward. Where the automatic fold stops at three quarters to
+     * leave slack for the token estimate running loose on dense tool output, the rolling strategy
+     * reaches for a larger slice of the window. It still sits inside the refusal edge, is lowered by a
+     * typed budget, and stays behind the oversized-turn clamp and the shrink-on-refusal retry that
+     * absorb any overshoot against a backend that counts differently than this estimate.
+     */
+    private fun rollingCeilingTokens(): Int {
+        val window = contextWindowTokens() ?: return typedBudgetTokens() ?: 0
+        val fill = (window * ROLLING_WINDOW_PERCENT / 100).coerceAtLeast(MIN_CONTEXT_CEILING_TOKENS)
+        return minOf(cappedByBudget(fill), hardCeilingTokens())
+    }
 
     /**
      * The copy of the conversation handed to the model for one turn. Under StopAtLimit this is the
@@ -310,7 +329,8 @@ class AppState(val store: H2Store) {
      */
     private fun outbound(s: SessionState, shrinkPct: Int): List<Msg> =
         ContextTrimmer.bound(
-            s.promptHistory(), config.contextStrategy, trimBudgetTokens(shrinkPct)
+            s.promptHistory(), config.contextStrategy, trimBudgetTokens(shrinkPct),
+            config.contextKeepRecentMessages
         )
 
     /** The server chain id to reuse for one turn, or null to replay from the client instead. Trimming
@@ -544,7 +564,8 @@ class AppState(val store: H2Store) {
             // request the loop fires -- not only the first -- is capped to the configured budget
             // as tool observations accumulate.
             turnSource = ResponsesTurnSource(
-                ResponsesClient(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct)
+                ResponsesClient(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct),
+                config.contextKeepRecentMessages
             ),
 
             registry = ToolRegistry(tools),
@@ -640,6 +661,8 @@ class AppState(val store: H2Store) {
         private const val WINDOW_MARGIN_TOKENS = 4_096
         /** Where folding starts, as a percentage of the window; the refusal happens at its edge. */
         private const val FOLD_WINDOW_PERCENT = 75
+        /** How much of the window the rolling strategy fills toward, seeking the model's maximum. */
+        private const val ROLLING_WINDOW_PERCENT = 90
 
         /**
          * The data directory. Defaults to a per-user location that does not depend

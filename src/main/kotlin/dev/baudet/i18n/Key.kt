@@ -72,6 +72,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     MaxTokensLabel("max output tokens (0 = server)", "max output tokens (0 = server)", "jetons de sortie max (0 = serveur)", "max. Ausgabetoken (0 = Server)"),
     ContextBudgetLabel("context budget (tokens, 0 = auto)", "context-budget (tokens, 0 = automatisch)", "budget de contexte (jetons, 0 = auto)", "Kontextbudget (Token, 0 = auto)"),
     ContextStrategyLabel("when context runs out", "wanneer de context opraakt", "en cas de saturation du contexte", "bei erschöpftem Kontext"),
+    KeepRecentLabel("keep last turns (min 1)", "laatste beurten houden (min 1)", "garder les derniers tours (min 1)", "letzte Runden behalten (min 1)"),
     TemperatureLabel("temperature", "temperature", "température", "Temperatur"),
     TopPLabel("top_p (blank = do not send)", "top_p (leeg = niet sturen)", "top_p (vide = ne pas envoyer)", "top_p (leer = nicht senden)"),
     ReasoningEffortLabel("reasoning-effort", "reasoning-effort", "effort de raisonnement", "Begründungsaufwand"),
@@ -116,17 +117,17 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     TipSendResponseId("Sends previous_response_id so the backend reuses its own context instead of replaying the whole transcript each turn.", "Stuurt previous_response_id mee zodat de backend zijn eigen context hergebruikt in plaats van elke beurt het hele gesprek opnieuw te sturen.", "Envoie previous_response_id pour que le backend réutilise son propre contexte au lieu de rejouer tout le transcript à chaque tour.", "Sendet previous_response_id, damit das Backend seinen eigenen Kontext wiederverwendet, statt jeden Turn das ganze Protokoll erneut zu senden."),
     TipMaxIterations("How many tool round-trips one answer may take before the loop stops. A guard against a tool that never settles.", "Hoeveel tool-rondes één antwoord mag maken voordat de lus stopt. Een bewaking tegen een tool die nooit uitkomt.", "Le nombre d'allers-retours d'outils qu'une réponse peut faire avant que la boucle s'arrête. Un garde-fou contre un outil qui ne se stabilise jamais.", "Wie viele Werkzeug-Runden eine Antwort machen darf, bevor die Schleife stoppt. Eine Sicherung gegen ein Werkzeug, das nie zur Ruhe kommt."),
     TipAutoApproveSafe("Lets clearly safe read-only commands run without an approval prompt. Writes still ask unless the tool mode is auto.", "Laat duidelijk veilige alleen-lezen commando's draaien zonder een goedkeuringsprompt. Schrijven vraagt nog, tenzij de toolmodus op auto staat.", "Exécute les commandes en lecture seule manifestement sûres sans demande d'approbation. Les écritures demandent encore, sauf si le mode d'outil est auto.", "Lässt eindeutig sichere Nur-Lese-Befehle ohne Freigabeaufforderung laufen. Schreibfragen bleiben, außer der Werkzeugmodus steht auf auto."),
-    StrategyTruncate(
-        "trim the middle, keep start and end",
-        "midden inkorten, begin en eind houden",
-        "couper au milieu, garder début et fin",
-        "Mitte kürzen, Anfang und Ende behalten"
+    StrategyRecent(
+        "keep the last turns",
+        "de laatste beurten houden",
+        "garder les derniers tours",
+        "die letzten Runden behalten"
     ),
     StrategyRolling(
-        "keep only the latest turns",
-        "alleen de nieuwste beurten houden",
-        "ne garder que les derniers tours",
-        "nur die neuesten Runden behalten"
+        "fill the window, roll off old turns",
+        "venster vullen, oude beurten wegrollen",
+        "remplir la fenêtre, retirer les anciens tours",
+        "Fenster füllen, ältere Runden abrollen"
     ),
     StrategyStop(
         "stop and ask me to compact",
@@ -135,10 +136,16 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "stoppen und zum Kompaktieren auffordern"
     ),
     TipContextStrategy(
-        "How a conversation that outgrows the model is handled. Trim the middle keeps how it began plus the newest turns and drops what is between them; keep only the latest turns sends just the newest tail; stop and ask refuses the turn until you compact or start fresh. The stored conversation is never edited, so only the window sent to the model changes.",
-        "Hoe een gesprek wordt behandeld dat groter wordt dan het model aankan. Midden inkorten houdt het begin en de nieuwste beurten en laat het ertussen weg; alleen de nieuwste beurten stuurt alleen de nieuwste staart; stoppen en mij vragen weigert de beurt tot je compact of opnieuw begint. Het opgeslagen gesprek wordt nooit bewerkt, alleen het venster naar het model verandert.",
-        "Comment gérer une conversation plus grande que le modèle. Couper au milieu garde le début et les derniers tours et supprime ce qui les sépare ; ne garder que les derniers tours n'envoie que la dernière partie ; arrêter et me demander refuse le tour tant que vous ne compactez pas ou ne recommencez pas. La conversation enregistrée n'est jamais modifiée, seule la fenêtre envoyée au modèle change.",
-        "Wie eine Unterhaltung behandelt wird, die über das Modell hinauswächst. Mitte kürzen behält den Anfang und die neuesten Runden und lässt das Dazwischen weg; nur die neuesten Runden sendet nur den neuesten Teil; stoppen und fragen lehnt die Runde ab, bis Sie kompaktieren oder neu beginnen. Die gespeicherte Unterhaltung wird nie bearbeitet, nur das Fenster an das Modell ändert sich."
+        "How a conversation that outgrows the model is handled. Keep the last turns sends only a recent tail, the newest turn plus the few turns set below, which keeps a local model on task; fill the window sends as much as the model can carry and rolls the oldest turns off; stop and ask refuses the turn until you compact or start fresh. The system prompt is always sent first, and the stored conversation is never edited, so only the window sent to the model changes.",
+        "Hoe een gesprek wordt behandeld dat groter wordt dan het model aankan. De laatste beurten houden stuurt alleen een recente staart, de nieuwste beurt plus de paar beurten hieronder, wat een lokaal model op koers houdt; het venster vullen stuurt zoveel als het model aankan en rolt de oudste beurten eraf; stoppen en mij vragen weigert de beurt tot je compact of opnieuw begint. De system-prompt gaat altijd eerst mee, en het opgeslagen gesprek wordt nooit bewerkt, alleen het venster naar het model verandert.",
+        "Comment gérer une conversation plus grande que le modèle. Garder les derniers tours n'envoie qu'une fin récente, le dernier tour plus les quelques tours ci-dessous, ce qui garde un modèle local sur sa tâche ; remplir la fenêtre envoie autant que le modèle peut porter et retire les tours les plus anciens ; arrêter et me demander refuse le tour tant que vous ne compactez pas ou ne recommencez pas. L'invite système part toujours en premier, et la conversation enregistrée n'est jamais modifiée, seule la fenêtre envoyée au modèle change.",
+        "Wie eine Unterhaltung behandelt wird, die über das Modell hinauswächst. Nur die letzten Runden sendet nur einen kurzen jüngsten Teil, die neueste Runde plus die paar unten eingestellten, was ein lokales Modell bei der Sache hält; das Fenster füllen sendet so viel das Modell tragen kann und rollt die ältesten Runden ab; stoppen und fragen lehnt die Runde ab, bis Sie kompaktieren oder neu beginnen. Der System-Prompt geht immer zuerst mit, und die gespeicherte Unterhaltung wird nie bearbeitet, nur das Fenster an das Modell ändert sich."
+    ),
+    TipKeepRecent(
+        "For keep the last turns: how many turns before the current one to send back. The system prompt always leads however small this is, and the current turn always goes, so 1 sends just the newest turn.",
+        "Voor de laatste beurten houden: hoeveel beurten vóór de huidige worden teruggestuurd. De system-prompt gaat altijd eerst, hoe klein dit ook is, en de huidige beurt gaat altijd mee, dus 1 stuurt alleen de nieuwste beurt.",
+        "Pour garder les derniers tours : combien de tours avant celui-ci sont renvoyés. L'invite système vient toujours en premier, aussi petit soit-ce, et le tour actuel part toujours, donc 1 n'envoie que le dernier tour.",
+        "Für nur die letzten Runden: wie viele Runden vor der aktuellen zurückgesandt werden. Der System-Prompt geht immer zuerst, wie klein auch immer, und die aktuelle Runde geht immer mit, also sendet 1 nur die neueste Runde."
     ),
     ContextTooLong(
         "not sent: this conversation is too large for the model. Nothing left your machine, so your message is still in the box. Compact it, start a new conversation, or raise the context budget in Settings.",
@@ -182,6 +189,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
     ErrMaxTokens("max output tokens must be 0 or a positive number", "max output tokens moet 0 of een positief getal zijn", "les jetons de sortie max doivent être 0 ou un nombre positif", "max. Ausgabetoken muss 0 oder eine positive Zahl sein"),
     ErrContextBudget("context budget must be 0 or a positive number", "context-budget moet 0 of een positief getal zijn", "le budget de contexte doit être 0 ou un nombre positif", "Kontextbudget muss 0 oder eine positive Zahl sein"),
+    ErrKeepRecent("keep last turns must be 1 or more", "laatste beurten houden moet 1 of meer zijn", "les tours à garder doivent être au moins 1", "zu behaltende Runden müssen mindestens 1 sein"),
     ErrTemperature("temperature must be between 0 and 2", "temperature moet tussen 0 en 2", "la température doit être comprise entre 0 et 2", "Temperatur muss zwischen 0 und 2 liegen"),
     ErrTopP("top_p must be between 0 (exclusive) and 1, or blank", "top_p moet tussen 0 (excl) en 1, of leeg", "top_p doit être entre 0 (exclus) et 1, ou vide", "top_p muss zwischen 0 (ausschließlich) und 1 sein, oder leer"),
     ErrBaseUrl("base url must start with http:// or https://", "basis-url moet met http:// of https:// beginnen", "l'url de base doit commencer par http:// ou https://", "Basis-URL muss mit http:// oder https:// beginnen"),

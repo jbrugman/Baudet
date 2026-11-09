@@ -17,6 +17,13 @@ val json = Json {
     isLenient = true
     encodeDefaults = true
     explicitNulls = false
+    // A saved value that no longer fits its type falls back to the property default instead of
+    // throwing. Removing a Settings choice, such as a retired context strategy, must not make the
+    // whole stored configuration undecodable: [dev.baudet.store.H2Store.load] resets every setting
+    // to its default on any decode failure, so one stale value would wipe the base url, key and
+    // model too. With coercion a retired value simply reverts to the new default and the rest rides
+    // along untouched.
+    coerceInputValues = true
 }
 
 /** JsonNull is a JsonPrimitive singleton, so it has to be filtered explicitly. */

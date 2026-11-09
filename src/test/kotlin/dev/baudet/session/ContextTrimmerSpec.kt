@@ -25,7 +25,7 @@ class ContextTrimmerSpec : BehaviorSpec({
                 ContextTrimmer.bound(history, ContextStrategy.RollingWindow, 1L) shouldNotBe history
             }
             then("a zero budget leaves it whole, because the window is unknown") {
-                ContextTrimmer.bound(history, ContextStrategy.TruncateAtMiddle, 0L) shouldBe history
+                ContextTrimmer.bound(history, ContextStrategy.RecentMessages, 0L) shouldBe history
             }
         }
     }
@@ -33,7 +33,7 @@ class ContextTrimmerSpec : BehaviorSpec({
     given("an unknown window") {
         val history = msgs(6) + Msg("user", "current question")
         `when`("trimming with a zero budget") {
-            val out = ContextTrimmer.trim(history, ContextStrategy.TruncateAtMiddle, 0L)
+            val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 0L)
             then("nothing is invented, so the whole conversation is left as it was") {
                 out shouldBe history
             }
@@ -43,7 +43,7 @@ class ContextTrimmerSpec : BehaviorSpec({
     given("a conversation that already fits") {
         val history = msgs(3) + Msg("user", "short")
         `when`("trimming generously") {
-            val out = ContextTrimmer.trim(history, ContextStrategy.TruncateAtMiddle, 1_000_000L)
+            val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 1_000_000L)
             then("nothing is dropped, so no placeholder note is inserted") {
                 out shouldBe history
                 out.none { isNote(it) } shouldBe true
@@ -71,26 +71,80 @@ class ContextTrimmerSpec : BehaviorSpec({
         }
     }
 
-    given("truncate at middle over a long conversation") {
+    given("keep last turns over a long conversation, budget not binding") {
         val prior = msgs(10)
         val current = Msg("user", "the latest question")
         val history = prior + current
-        val out = ContextTrimmer.trim(history, ContextStrategy.TruncateAtMiddle, 600L)
-        `when`("the middle is dropped") {
+        // A generous budget so the only thing that limits the window is the count: exactly the last
+        // three messages (two prior plus the current turn) go out, and nothing older than them.
+        val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 1_000_000L, keepRecent = 3)
+        `when`("the window is the recent tail only") {
             then("the current turn always survives") {
                 out.last() shouldBe current
             }
-            then("the first turn is kept as an anchor") {
-                out.first() shouldBe prior.first()
+            then("exactly the last keep-recent messages are sent") {
+                out shouldBe history.takeLast(3)
             }
-            then("the newest turns are kept alongside the anchor") {
-                out[out.size - 2] shouldBe prior.last()
+            then("no count-based trimming inserts a note, because it is a clean tail") {
+                out.any { isNote(it) } shouldBe false
             }
-            then("a note marks the omitted middle") {
-                out.count { isNote(it) } shouldBe 1
+        }
+    }
+
+    given("keep last turns against the drift the old anchor caused") {
+        // Distinct content per turn, so matching a message by value really means matching that turn:
+        // the guarantee is that the opening turn is not resent, where trim-the-middle pinned it and
+        // pulled the model back to a subject the conversation had already left behind.
+        val turns = (1..10).map {
+            Msg(if (it % 2 == 1) "user" else "assistant", "turn $it " + "x".repeat(300))
+        }
+        val current = Msg("user", "the latest question")
+        val history = turns + current
+        val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 1_000_000L, keepRecent = 4)
+        `when`("only a recent tail is sent") {
+            then("the opening turn is not pinned at the front as an anchor") {
+                out.first() shouldNotBe turns.first()
             }
-            then("the middle really was removed") {
-                (out.filterNot { isNote(it) }.size < prior.size + 1) shouldBe true
+            then("no long-finished opening turn is resurrected into the request") {
+                out.contains(turns.first()) shouldBe false
+            }
+            then("the window still ends on the current turn") {
+                out.last() shouldBe current
+            }
+        }
+    }
+
+    given("keep last turns asked down to one") {
+        val prior = msgs(10)
+        val current = Msg("user", "the latest question")
+        val history = prior + current
+        val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 1_000_000L, keepRecent = 1)
+        `when`("the smallest window is requested") {
+            then("only the current turn goes out") {
+                out shouldBe listOf(current)
+            }
+        }
+    }
+
+    given("keep last turns where the count is larger than the conversation") {
+        val history = msgs(3) + Msg("user", "short")
+        val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 1_000_000L, keepRecent = 15)
+        `when`("the conversation is shorter than the count") {
+            then("the whole conversation is sent, nothing is dropped") {
+                out shouldBe history
+            }
+        }
+    }
+
+    given("keep last turns where the recent tail still busts the budget") {
+        // Even a count-bounded window is fitted to the token budget: a huge newest turn is clamped and
+        // the older turns of that window roll off, so a recent tail cannot itself overflow the model.
+        val history = msgs(4) + Msg("tool", "O".repeat(20_000))
+        val out = ContextTrimmer.trim(history, ContextStrategy.RecentMessages, 4_000L, keepRecent = 3)
+        `when`("the recent tail cannot fit the window") {
+            then("the oversized newest turn is clamped, never dropped") {
+                out.last().content.contains("truncated") shouldBe true
+                (out.last().content.length <= 4_000 * 3) shouldBe true
             }
         }
     }
@@ -125,6 +179,7 @@ class ContextTrimmerSpec : BehaviorSpec({
             }
         }
     }
+
     given("a lone message that busts the window") {
         // The old early return for a one-message history handed an oversized turn straight through,
         // which is the exact failure the clamping exists to stop: a single large tool result on its
