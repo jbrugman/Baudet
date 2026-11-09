@@ -7,7 +7,7 @@ import dev.mule.api.Turn
  * model answered" and "the model asked to act", so swapping prompted-JSON for a
  * native function-calling backend is a new implementation here, never a loop edit.
  */
-interface CallExtractor {
+fun interface CallExtractor {
 
     /** The calls this turn asked for; empty means the turn is a final answer. */
     fun extract(turn: Turn): List<ToolCall>

@@ -8,10 +8,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.nio.file.Files
-import java.util.concurrent.TimeUnit
 
 /**
  * Runs a shell command in the project folder so the model can build, test or inspect a
@@ -23,8 +20,8 @@ import java.util.concurrent.TimeUnit
  * does two things around the run: it uses the project folder as the working directory and
  * the system temp folder as TMPDIR, so scripts a command writes land where we expect, and
  * it checks both folders through [ExecuteWorkspace] before it stages the command as a temp
- * script. Output is capped and drained concurrently so a chatty command cannot hang the
- * loop or flood the context. A non-zero exit is model-facing feedback, never an exception.
+ * script. The run itself, with its concurrent capped drain, is delegated to
+ * [ProcessRunner]. A non-zero exit is model-facing feedback, never an exception.
  */
 class ExecuteTool : Tool {
 
@@ -75,39 +72,19 @@ class ExecuteTool : Tool {
             return fail("the run script did not stage inside the allowed folders")
         }
 
-        try {
+        return try {
             Files.writeString(script, "#!/bin/bash\n$command\n")
-            val process = ProcessBuilder("/bin/bash", script.toAbsolutePath().toString())
-                .directory(cwd.toFile())
-                .redirectErrorStream(false)
-                .apply { environment()["TMPDIR"] = temp.toString() }
-                .start()
-
-            var out = Captured("", false, 0)
-            var err = Captured("", false, 0)
-            val outThread = Thread { out = readCapped(process.inputStream) }
-            val errThread = Thread { err = readCapped(process.errorStream) }
-            outThread.start()
-            errThread.start()
-
-            val finished = process.waitFor(timeout.toLong(), TimeUnit.SECONDS)
-            val timedOut = !finished
-            if (timedOut) process.destroyForcibly()
-            outThread.join(JOIN_MILLIS)
-            errThread.join(JOIN_MILLIS)
-            val exit = if (timedOut) null else process.exitValue()
-
-            val head = if (timedOut) "run_command timed out after ${timeout}s (no exit code)"
-            else "exit code: $exit"
-            val body = buildString {
-                append(head)
-                append(section("stdout", out))
-                append(section("stderr", err))
-                if (out.length == 0 && err.length == 0) append("\n(no output)")
-            }
-            return ToolResult(ok = !timedOut && exit == 0, output = body)
+            val result = ProcessRunner.run(
+                argv = listOf("/bin/bash", script.toAbsolutePath().toString()),
+                dir = cwd.toFile(),
+                timeoutSeconds = timeout.toLong(),
+                configure = { pb -> pb.environment()["TMPDIR"] = temp.toString() }
+            )
+            val head = if (result.timedOut) "run_command timed out after ${timeout}s (no exit code)"
+            else "exit code: ${result.exitCode}"
+            ToolResult(ok = !result.timedOut && result.exitCode == 0, output = head + result.body())
         } catch (_: Exception) {
-            return fail("the command could not be started or completed")
+            fail("the command could not be started or completed")
         } finally {
             runCatching { Files.deleteIfExists(script) }
         }
@@ -116,41 +93,10 @@ class ExecuteTool : Tool {
     private fun JsonObject.intOrNull(key: String): Int? =
         (this[key] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
 
-    private fun section(label: String, cap: Captured): String {
-        if (cap.length == 0) return ""
-        val marker = if (cap.truncated) " (truncated, ${cap.length} bytes read)" else ""
-        return "\n--- $label$marker ---\n" + cap.text
-    }
-
-    /** Drains a stream fully (so the process never blocks on a full pipe) while keeping only a cap. */
-    private fun readCapped(input: InputStream): Captured {
-        val buffer = ByteArray(8192)
-        val kept = ByteArrayOutputStream()
-        var total = 0
-        var truncated = false
-        while (true) {
-            val n = runCatching { input.read(buffer) }.getOrDefault(-1)
-            if (n < 0) break
-            total += n
-            if (kept.size() < OUTPUT_CAP_BYTES) {
-                val room = OUTPUT_CAP_BYTES - kept.size()
-                kept.write(buffer, 0, minOf(n, room))
-                if (total > OUTPUT_CAP_BYTES) truncated = true
-            } else {
-                truncated = true
-            }
-        }
-        return Captured(kept.toString(Charsets.UTF_8), truncated, total)
-    }
-
     private fun fail(reason: String): ToolResult = ToolResult(ok = false, output = "run_command: $reason")
-
-    private class Captured(val text: String, val truncated: Boolean, val length: Int)
 
     companion object {
         private const val DEFAULT_TIMEOUT_SECONDS = 120
         private const val MAX_TIMEOUT_SECONDS = 600
-        private const val JOIN_MILLIS = 1_000L
-        private const val OUTPUT_CAP_BYTES = 64 * 1024
     }
 }

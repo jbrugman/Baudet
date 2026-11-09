@@ -43,11 +43,10 @@ class ReadFileTool : Tool {
         val rel = args.str("file") ?: return fail("needs a file argument")
         val root = ctx.root ?: return fail("no project folder is linked to read from")
 
-        val resolved = root.resolve(rel).normalize()
-        if (!resolved.startsWith(root)) return fail("$rel resolves outside the project folder")
-        if (!Files.isRegularFile(resolved)) return fail("$rel does not exist inside the folder.${FolderListing.hint(root)}")
-        if (FolderBoundary.realWithin(root, resolved) == null)
-            return fail("$rel resolves outside the folder once links are followed")
+        val resolved = when (val r = FolderBoundary.resolveFileWithin(root, rel)) {
+            is FolderBoundary.Resolved.Inside -> r.path
+            is FolderBoundary.Resolved.Refused -> return fail(r.reason)
+        }
 
         val size = runCatching { Files.size(resolved) }.getOrElse { return fail("$rel could not be read") }
         if (size > MAX_FILE_BYTES) return fail("$rel is larger than the ${MAX_FILE_BYTES / 1024} KB read limit")
