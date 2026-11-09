@@ -58,7 +58,7 @@ class CompactionPlanSpec : BehaviorSpec({
      * The fold has to work on a conversation that no longer fits one call, so the batch it picks
      * is the difference between compacting rescuing such a session and failing on the same
      * context error. These pin that a batch fits, that it never comes back empty, and that what
-     * does not fit is handed to the next call rather than lost.
+     * does not fit is handed to the call after it rather than lost.
      */
     given("four folded turns of a hundred characters each and a ceiling of three hundred") {
         val older = (1..4).map { Msg("user", "t$it-" + "x".repeat(96)) }
@@ -97,26 +97,35 @@ class CompactionPlanSpec : BehaviorSpec({
         }
     }
 
-    given("a batch larger than the ceiling it is summarized under") {
-        val older = listOf(Msg("user", "z".repeat(5_000)))
-        `when`("building the text with a ceiling of five hundred") {
-            val source = CompactionPlan.source(null, older, 500)
-            then("the text is cut to the ceiling instead of sent whole") {
-                (source.length < 5_000) shouldBe true
+    /**
+     * A carried summary is not the only thing the wrapper spends: source also writes the
+     * "(previous summary) " prefix and a blank line around it. A batch sized to the bare summary
+     * length overflows the ceiling by those wrapper characters once the batch is poured in, and a
+     * fold that then had to stop mid-batch would leave a turn half-read. This pins that the wrapper
+     * is reserved, so a fitting batch stays completely inside the ceiling.
+     */
+    given("a carried summary and turns that fit only when the wrapper is reserved") {
+        val older = (1..6).map { Msg("user", "x".repeat(987)) }
+        `when`("picking the batch next to a thousand-character summary under a five thousand ceiling") {
+            val (batch, rest) = CompactionPlan.foldBatch(older, summaryChars = 1_000, maxChars = 5_000)
+            then("the batch plus the wrapped summary stays inside the ceiling") {
+                CompactionPlan.source("s".repeat(1_000), batch).length shouldBe 4_006
+                (CompactionPlan.source("s".repeat(1_000), batch).length <= 5_000) shouldBe true
             }
-            then("the cut is marked, so the model knows it is looking at a fragment") {
-                (source.contains("cut here")) shouldBe true
+            then("one turn fewer than an unreserved batch would take, so nothing spills over") {
+                batch.size shouldBe 3
+                rest.size shouldBe 3
             }
         }
     }
 
     /**
      * The shape of a session that actually gets stranded: one enormous tool observation as the
-     * oldest turn, in a conversation already past the backend's window. foldBatch has to take it --
-     * a fold that refuses to take a turn can never finish -- so the ceiling in [source] is the only
-     * thing between that turn and a request the backend rejects. It once received 0 there, which
-     * [source] read as "no ceiling", and pressing Compact failed with the very error it was meant
-     * to clear. This pins the turn arriving cut rather than whole.
+     * oldest turn, in a conversation already past the backend's window. foldBatch takes it -- a
+     * fold that refuses to take a turn can never finish -- and the caller keeps such an oversized
+     * turn verbatim rather than sending it cut, because the cut tail would never reach the model
+     * while the whole turn got cleared once its summary was accepted. This pins the turn arriving
+     * whole, held back for a call that can carry it, never halving the fold.
      */
     given("a stranded session whose oldest turn is a 400k character tool observation") {
         val huge = Msg("tool", "O".repeat(400_000))
@@ -125,16 +134,6 @@ class CompactionPlanSpec : BehaviorSpec({
             then("the fold takes it, so the fold cannot stall on an oversized turn") {
                 batch.size shouldBe 1
                 rest shouldBe emptyList()
-            }
-        }
-        `when`("building that batch into the text under the same ceiling") {
-            val source = CompactionPlan.source(null, listOf(huge), 48_000)
-            then("it is cut to the ceiling instead of sent whole") {
-                (source.length < 400_000) shouldBe true
-                (source.length <= 48_000 + 64) shouldBe true
-            }
-            then("which keeps the call far inside a 128k window at three characters a token") {
-                (source.length / 3 < 128_000) shouldBe true
             }
         }
     }

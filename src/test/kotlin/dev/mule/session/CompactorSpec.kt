@@ -129,4 +129,70 @@ class CompactorSpec : BehaviorSpec({
             }
         }
     }
+
+    /**
+     * The ceiling is what keeps a fold from losing text. A turn bigger than one summarization call
+     * can only reach the model in pieces, and a piece it never read must never be cleared behind a
+     * summary -- that is the silent loss this whole path exists to prevent. The fold stops at such
+     * a turn and keeps it verbatim. These flow tests drive that decision through the real compact()
+     * with an injected fake summarizer, so the guard is pinned end to end and not only in the plan.
+     */
+    given("a session whose only turn is larger than one call can carry") {
+        val huge = Msg("tool", "O".repeat(60_000))
+        val state = SessionState("s", "m", null, mutableListOf(huge))
+        val seen = mutableListOf<String>()
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { src, _ ->
+                seen.add(src)
+                Turn("a summary", null, null, "response.completed")
+            }
+        )
+        `when`("compacting with nothing kept verbatim") {
+            val result = compactor.compact(state, keepLast = 0) {}
+            then("nothing folds and the oversized turn survives untouched") {
+                result shouldBe null
+                state.messages.size shouldBe 1
+                state.messages[0].content shouldBe huge.content
+            }
+            then("the summarizer is never called, because the guard stops before any cut") {
+                seen shouldBe emptyList()
+            }
+        }
+    }
+
+    given("an oversized turn holding back an otherwise foldable prefix") {
+        val m0 = Msg("user", "first question")
+        val m1 = Msg("assistant", "first answer")
+        val huge = Msg("tool", "O".repeat(60_000))
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(m0, m1, huge, Msg("user", "keep one"), Msg("assistant", "keep two"))
+        )
+        val seen = mutableListOf<String>()
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { src, _ ->
+                seen.add(src)
+                Turn("the summary", null, null, "response.completed")
+            }
+        )
+        `when`("compacting and keeping the last two turns") {
+            val result = compactor.compact(state, keepLast = 2) {}
+            then("the foldable prefix is summarized once, whole, never cut") {
+                seen.size shouldBe 1
+                seen[0].contains("first question") shouldBe true
+                seen[0].contains("first answer") shouldBe true
+                seen[0].contains("cut here") shouldBe false
+            }
+            then("only the folded turns are cleared and the oversized turn is kept in full") {
+                result shouldBe "the summary"
+                state.summary shouldBe "the summary"
+                state.messages.size shouldBe 3
+                state.messages[0].content shouldBe huge.content
+                state.messages[1].content shouldBe "keep one"
+                state.messages[2].content shouldBe "keep two"
+            }
+        }
+    }
 })

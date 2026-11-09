@@ -1,6 +1,7 @@
 package dev.mule.session
 
 import dev.mule.api.ResponsesClient
+import dev.mule.api.Turn
 import dev.mule.config.AppConfig
 
 /**
@@ -8,14 +9,20 @@ import dev.mule.config.AppConfig
  * backend (verified against its OpenAPI paths), so the client summarizes and
  * the result replaces the older turns. Exactly what Codex itself does. Runs as
  * a separate, cheap call with store=false.
+ *
+ * [summarize] is the single summarization call this class makes, injected so the lossless
+ * guarantee -- that no turn is ever cleared on a summary the model did not fully read -- can be
+ * driven through the real [compact] flow without a backend. It defaults to the cheap, unstored
+ * call the fold is meant to make.
  */
-class Compactor(private val cfg: AppConfig, private val windowTokens: Int? = null) {
-
-    /** Model-facing, so always English: this is what tells the model to summarize. */
-    private val systemPrompt =
-        "Summarise the following conversation as compactly as possible. Keep: file names, " +
-            "symbols, decisions taken, open points, and every factual conclusion. " +
-            "No commentary, no preamble."
+class Compactor(
+    private val cfg: AppConfig,
+    private val windowTokens: Int? = null,
+    private val summarize: (source: String, onDelta: (String) -> Unit) -> Turn =
+        { source, onDelta ->
+            ResponsesClient(cfg).completeOnce(SUMMARY_SYSTEM_PROMPT, source, SUMMARY_TOKENS, onDelta)
+        }
+) {
 
     /**
      * Keep the last [keepLast] turns verbatim, summarize everything before them. The fold runs
@@ -26,24 +33,38 @@ class Compactor(private val cfg: AppConfig, private val windowTokens: Int? = nul
      * how a session gets stranded. Only turns whose summary the backend proved complete are
      * cleared, so a refused batch leaves those turns verbatim and the fold stops there.
      *
+     * The fold never cuts a message to make it fit. A turn larger than one summarization call
+     * can carry would have to be cut in half, and the cut tail would never reach the model yet
+     * the whole turn would be cleared once its summary was accepted -- losing text it never read.
+     * The fold therefore stops at such a turn and keeps it, and everything after it, verbatim;
+     * the batches already proved complete still fold. Clearing a turn the model only half read
+     * is a silent loss, and losing the user's words is the one thing compacting must never do.
+     *
      * @return the running summary, or null when nothing at all was folded
      */
     fun compact(state: SessionState, keepLast: Int, onDelta: (String) -> Unit): String? {
         val splitAt = CompactionPlan.splitAt(state.messages.size, keepLast) ?: return state.summary
         val maxChars = maxSourceChars()
-        val client = ResponsesClient(cfg)
         var summary = state.summary
         var remaining = state.messages.subList(0, splitAt).toList()
         var folded = 0
         var stop = false
         while (!stop && remaining.isNotEmpty()) {
             val (batch, rest) = CompactionPlan.foldBatch(remaining, summary?.length ?: 0, maxChars)
-            val source = CompactionPlan.source(summary, batch, maxChars)
+            val source = CompactionPlan.source(summary, batch)
+            // [foldBatch] keeps a fitting batch's complete text inside maxChars, so a source longer
+            // than the ceiling means this batch is a single turn too big for one call. The only way
+            // to send it would be to cut its tail, which loses text the model would never read once
+            // the whole turn were cleared. End the fold here and keep that turn verbatim instead.
+            if (source.length > maxChars) {
+                stop = true
+                break
+            }
             // A batch that cannot be summarized at all (backend down, stream lost) must not undo
             // the batches already folded: stop here and keep what was proved. The very first
             // failure still goes out as an exception, or an outage reads as "returned nothing".
             val turn = try {
-                client.completeOnce(systemPrompt, source, SUMMARY_TOKENS, onDelta)
+                summarize(source, onDelta)
             } catch (e: Exception) {
                 if (folded == 0) throw e
                 stop = true
@@ -91,6 +112,12 @@ class Compactor(private val cfg: AppConfig, private val windowTokens: Int? = nul
         ).coerceAtLeast(MIN_SOURCE_CHARS)
 
     companion object {
+        /** Model-facing, so always English: this is what tells the model to summarize. */
+        const val SUMMARY_SYSTEM_PROMPT =
+            "Summarise the following conversation as compactly as possible. Keep: file names, " +
+                "symbols, decisions taken, open points, and every factual conclusion. " +
+                "No commentary, no preamble."
+
         /** Output bound for one summary call: a summary is meant to be short. */
         private const val SUMMARY_TOKENS = 512
 
@@ -121,7 +148,7 @@ class Compactor(private val cfg: AppConfig, private val windowTokens: Int? = nul
          * A summary cut off at a token limit reports an incompleteReason, and a stream that
          * closed without a terminal event never reaches a completed state, so both are refused.
          */
-        internal fun acceptsSummary(turn: dev.mule.api.Turn): Boolean =
+        internal fun acceptsSummary(turn: Turn): Boolean =
             turn.text.isNotBlank() && turn.incompleteReason == null && turn.completed
     }
 }
