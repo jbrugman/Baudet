@@ -13,6 +13,8 @@ import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ActionEvent
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import javax.swing.AbstractAction
 import javax.swing.BoxLayout
 import javax.swing.JButton
@@ -142,6 +144,23 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private var splitMode = false
     /** The dock's height before the user drags: the input's own preferred height, set at build. */
     private var defaultDockHeight = 40
+    /** The composer: toolbar, reasoning dock, input and status, as the bottom of [centerSplit]. */
+    private val south = JPanel(BorderLayout())
+    /**
+     * Splits the transcript (top) from the composer (bottom). Its divider sits just above the
+     * buttons, so the composer can be made as tall as the transcript, the resize the layout
+     * never had before, since only the reasoning and input split was ever draggable.
+     */
+    private val centerSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT).apply {
+        isContinuousLayout = false   // settles on release, so the height saves then, not per pixel
+        resizeWeight = 1.0           // window growth enlarges the transcript; the composer keeps its height
+        isOneTouchExpandable = false
+        border = null
+    }
+    /** The composer height in pixels; 0 until the first placement, then the value the user wants. */
+    private var composerHeight = 0
+    /** True while [placeCenter] moves the divider itself, so that move is never treated as a drag. */
+    private var placingCenter = false
 
     /** The renderer of the live turn, so that completion and failure can both flush its tail. */
     private var lastRender: TurnRender? = null
@@ -211,7 +230,6 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // the dock's default height is available right here at build time.
         defaultDockHeight = inputScroll.preferredSize.height.coerceAtLeast(40)
         thinkingScroll.preferredSize = Dimension(0, defaultDockHeight)
-        val south = JPanel(BorderLayout())
         // The header sits under the toolbar and the dock straight above the input, so closing
         // the dock hands its rows back to the input without moving anything else around.
         val above = JPanel(BorderLayout())
@@ -225,8 +243,9 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         bottom.add(status)
         south.add(bottom, BorderLayout.SOUTH)
 
-        add(scroll, BorderLayout.CENTER)
-        add(south, BorderLayout.SOUTH)
+        centerSplit.topComponent = scroll
+        centerSplit.bottomComponent = south
+        add(centerSplit, BorderLayout.CENTER)
 
         // A released divider is the moment worth saving: the split is not continuous, so this
         // fires on mouse-up rather than per pixel, and only while the dock is actually shown.
@@ -234,6 +253,25 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             if (e.propertyName == "dividerLocation" && splitMode)
                 state.rememberReasoningDivider(bottomSplit.dividerLocation)
         }
+
+        // Dragging the composer divider is worth saving on release, not per pixel, and the
+        // composer height is the window-independent value, so that is what persists. A placement
+        // placeCenter makes itself is ignored: it only echoes back a clamp from a very small window.
+        centerSplit.addPropertyChangeListener { e ->
+            if (e.propertyName != "dividerLocation" || placingCenter) return@addPropertyChangeListener
+            val px = WindowLayout.componentHeightForDivider(
+                centerSplit.height, centerSplit.dividerLocation, centerSplit.dividerSize
+            )
+            if (px > 0 && px != composerHeight) {
+                composerHeight = px
+                state.rememberComposerHeight(px)
+            }
+        }
+        // The composer keeps its height across window resizes: each size change re-places the
+        // divider from the stored height, so the transcript, never the composer, absorbs growth.
+        centerSplit.addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) = placeCenter()
+        })
 
         // Start with no reasoning: the plain input, no divider bar. applyDock brings the split
         // in the first time a thinking turn fills the dock.
@@ -300,6 +338,30 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         splitMode = wanted
         stack.revalidate()
         stack.repaint()
+    }
+
+    /**
+     * Place the transcript and composer divider so the composer keeps its height. The stored
+     * height is used once the user has dragged it; until then the composer opens at its own
+     * preferred height, so nothing jumps on first show. Called on every resize, which is what
+     * lets the transcript, not the composer, take the growth.
+     */
+    private fun placeCenter() {
+        val h = centerSplit.height
+        if (h <= 0) return
+        if (composerHeight <= 0)
+            composerHeight = WindowLayout.resolveDialogSize(
+                state.config.composerHeight, south.preferredSize.height
+            )
+        val target = WindowLayout.dividerForHeight(h, composerHeight, centerSplit.dividerSize)
+        if (centerSplit.dividerLocation != target) {
+            placingCenter = true
+            try {
+                centerSplit.dividerLocation = target
+            } finally {
+                placingCenter = false
+            }
+        }
     }
 
     /**

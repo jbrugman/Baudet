@@ -160,6 +160,20 @@ class AppState(val store: H2Store) {
     }
 
     /**
+     * Remember the height of the composer block under the transcript so a rebuild, such as a
+     * language change, and the next launch reopen the split where the user left it. The height
+     * is stored in pixels because it is independent of the window size, so growing the window
+     * keeps the composer put. A non-positive value means never dragged, which lets the split
+     * fall back to the composer's own height. Like [rememberReasoningDivider] it rides in the
+     * same single-row JSON blob and never fires [onConfigSaved], so saving it cannot rebuild.
+     */
+    fun rememberComposerHeight(px: Int) {
+        if (px <= 0) return
+        config = config.copy(composerHeight = px)
+        store.save(config)
+    }
+
+    /**
      * Remember where and how big the user left the diff viewer, so the next patch reopens
      * there instead of re-centering at the small default. Like [updateWindowGeometry] it
      * rides in the same single-row JSON blob, so no schema is touched.

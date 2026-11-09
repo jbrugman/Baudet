@@ -111,6 +111,11 @@ data class AppConfig(
      */
     var reasoningDivider: Int = 0,
     /**
+     * The height of the composer block under the transcript. Another split, the same rule:
+     * it rides in the single-row JSON blob, so remembering it touches no schema.
+     */
+    var composerHeight: Int = 0,
+    /**
      * Where and how big the user last left the diff viewer, so a patch reopens there rather
      * than re-centering at the small default. Zero size means never stored, which lets the
      * viewer fall back to its own default on the first open; the position is trusted only once

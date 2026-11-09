@@ -383,6 +383,26 @@ class AppStateSpec : BehaviorSpec({
         }
     }
 
+    given("remembering the composer height") {
+        val state = freshState()
+        `when`("the user drags the composer divider") {
+            state.rememberComposerHeight(180)
+            then("the live config keeps the dragged height") {
+                state.config.composerHeight shouldBe 180
+            }
+            then("the height is persisted, so a restart keeps it") {
+                state.store.load()?.composerHeight shouldBe 180
+            }
+        }
+        `when`("a non-positive height arrives") {
+            state.rememberComposerHeight(180)
+            state.rememberComposerHeight(0)
+            then("a reset never overwrites the stored height") {
+                state.config.composerHeight shouldBe 180
+            }
+        }
+    }
+
     given("the tool-loop gate") {
         fun writableState(mode: ToolMode, read: Boolean, write: Boolean, link: Boolean): AppState {
             val state = freshState()
