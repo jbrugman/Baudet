@@ -56,6 +56,9 @@ Working:
 - capability probe: what the backend *does* rather than what it accepts
 - persisted session: the last conversation is restored after a restart
 - client-side compaction
+- context-budget enforcement: a turn that would not fit is folded away automatically (or
+  refused if even that cannot make room), and a tool loop stops before firing a request the
+  backend would reject for being too long, rather than burning a turn on a doomed call
 - UI text in English, Dutch, French or German, switchable at runtime (English is the default)
 - projects in a left sidebar, with conversations grouped under them and
   per-folder read/write/execute grants: Read gates the file tree and the read-only git
@@ -65,8 +68,12 @@ Working:
   linked folder grants, with tools enabled; a folder that cannot be written is reported,
   never silently skipped
 - `run_command` runs bash (and other interpreters) with the project folder as its working
-  directory and the system temp folder as `TMPDIR`; every command needs your approval,
-  even in Auto mode, because once bytes reach a shell the folder boundary is no longer ours
+  directory and the system temp folder as `TMPDIR`; by default every command needs your
+  approval, even in Auto mode, because once bytes reach a shell the folder boundary is no
+  longer ours. You can dial that back two ways, both off until you switch them on: pin the
+  exact command you are shown with **Always allow**, or turn on auto-approval of plainly
+  read-only commands (`ls`, `cat`, `git status` and the like); anything that chains, redirects,
+  substitutes or deletes still asks
 - a project file tree on the right, following the selected project
 - the file tree colors each file by its git state — green changed, blue untracked,
   red deleted (a ghost row when the file is gone from disk) — and double-clicking a
