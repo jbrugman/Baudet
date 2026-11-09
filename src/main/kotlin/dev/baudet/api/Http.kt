@@ -50,8 +50,17 @@ class Http(private val cfg: AppConfig) {
         return resp.statusCode() to resp.body()
     }
 
-    /** Yields the events of an SSE stream, lazily, in order. */
-    fun sse(path: String, body: String): Sequence<SseEvent> = sequence {
+    /**
+     * Yields the events of an SSE stream, lazily, in order. The live body is handed to [token] so
+     * that a Stop closes the socket and unwinds a read blocked waiting for the next event, while
+     * the boundary check catches a Stop that lands while events are still flowing. The body is
+     * always closed on the way out, so a stream abandoned early does not pin its connection.
+     */
+    fun sse(
+        path: String,
+        body: String,
+        token: CancellationToken = CancellationToken.NONE
+    ): Sequence<SseEvent> = sequence {
         val resp = client.send(
             request(path, body, "text/event-stream"),
             HttpResponse.BodyHandlers.ofLines()
@@ -60,6 +69,15 @@ class Http(private val cfg: AppConfig) {
             val err = resp.body().collect(Collectors.joining("\n"))
             throw BackendException(resp.statusCode(), err.ifBlank { "empty body" })
         }
-        for (ev in SseFramer.frame(resp.body().asSequence())) yield(ev)
+        val lines = resp.body()
+        token.attach(lines)
+        try {
+            for (ev in SseFramer.frame(lines.asSequence())) {
+                if (token.isCancelled) throw TurnCancelled()
+                yield(ev)
+            }
+        } finally {
+            runCatching { lines.close() }
+        }
     }
 }

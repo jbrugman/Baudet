@@ -23,8 +23,11 @@ class ResponsesClient(private val cfg: AppConfig) {
         previousResponseId: String?,
         tools: String? = null,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit = {}
-    ): Turn = call(buildRequest(system, history, userText, previousResponseId, tools), onDelta, onReasoning)
+        onReasoning: (String) -> Unit = {},
+        token: CancellationToken = CancellationToken.NONE
+    ): Turn = call(
+        buildRequest(system, history, userText, previousResponseId, tools), onDelta, onReasoning, token
+    )
 
     /** One-off call that is not stored. Used by the compactor. */
     fun completeOnce(system: String, userText: String, maxTokens: Int, onDelta: (String) -> Unit): Turn {
@@ -88,10 +91,11 @@ class ResponsesClient(private val cfg: AppConfig) {
     private fun call(
         body: JsonObject,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit = {}
+        onReasoning: (String) -> Unit = {},
+        token: CancellationToken = CancellationToken.NONE
     ): Turn {
         val acc = TurnAccumulator()
-        for (ev in Http(cfg).sse("/responses", body.toString())) {
+        for (ev in Http(cfg).sse("/responses", body.toString(), token)) {
             val d = acc.feed(ev)
             d?.text?.let { onDelta(it) }
             d?.reasoning?.let { onReasoning(it) }

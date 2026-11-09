@@ -20,6 +20,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     SendButton("Send  (ctrl+enter)", "Verzenden  (ctrl+enter)", "Envoyer  (ctrl+entrée)", "Senden  (Strg+Eingabe)"),
     NewSessionButton("New session", "Nieuwe sessie", "Nouvelle session", "Neue Sitzung"),
     CompactButton("Compact", "Compacten", "Compresser", "Kompaktieren"),
+    StopButton("Stop", "Stop", "Arrêter", "Stopp"),
+    TurnStopped("stopped", "gestopt", "arrêté", "gestoppt"),
     None("none", "geen", "aucun", "keine"),
     FailedPrefix("FAILED: {0}", "FAALDE: {0}", "ÉCHEC : {0}", "FEHLGESCHLAGEN : {0}"),
     ErrorPrefix("ERROR: {0}", "FOUT: {0}", "ERREUR : {0}", "FEHLER : {0}"),

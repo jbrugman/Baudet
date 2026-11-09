@@ -1,6 +1,7 @@
 package dev.baudet.app
 
 import dev.baudet.api.BackendException
+import dev.baudet.api.CancellationToken
 import dev.baudet.api.ModelWindows
 import dev.baudet.api.ResponsesClient
 import dev.baudet.api.Turn
@@ -57,6 +58,22 @@ class AppState(val store: H2Store) {
         set(value) {
             turnLock.set(value)
         }
+
+    /**
+     * The cancellation handle for the turn now in flight, or null while idle. [send] installs a
+     * fresh token when it claims the lock and drops it when the turn ends; [cancelTurn] reaches
+     * through it so a Stop closes the live socket even though it runs on the UI thread.
+     */
+    @Volatile private var activeToken: CancellationToken? = null
+
+    /**
+     * Ask the turn in flight to stop. It closes the token's live socket so a read blocked on the
+     * backend unwinds at once; a blocking read does not respond to a thread interrupt, which is
+     * why this is the authoritative stop. Safe to call while idle, when there is nothing to cut.
+     */
+    fun cancelTurn() {
+        activeToken?.cancel()
+    }
 
     /** The project a new chat is created under; set when one is selected in the sidebar. */
     var currentProjectId: String? = null
@@ -443,6 +460,10 @@ class AppState(val store: H2Store) {
         if (!turnLock.compareAndSet(false, true)) {
             throw IllegalStateException("a turn is already running")
         }
+        // Install the handle before the first request leaves, so a Stop pressed the instant the
+        // turn begins still has a token to close; the same token is reused across overflow retries.
+        val token = CancellationToken()
+        activeToken = token
         val s = session
         s.messages.add(Msg("user", userText))
         val afterPrompt = s.messages.size
@@ -451,8 +472,8 @@ class AppState(val store: H2Store) {
         try {
             while (true) {
                 try {
-                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, onDelta, onReasoning)
-                    else runPlainTurn(s, shrinkPct, onDelta, onReasoning)
+                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, token, onDelta, onReasoning)
+                    else runPlainTurn(s, shrinkPct, token, onDelta, onReasoning)
                     persistTo(s)
                     return turn
                 } catch (e: BackendException) {
@@ -488,6 +509,7 @@ class AppState(val store: H2Store) {
             }
             throw e
         } finally {
+            activeToken = null
             turnLock.set(false)
         }
     }
@@ -496,6 +518,7 @@ class AppState(val store: H2Store) {
     private fun runPlainTurn(
         s: SessionState,
         shrinkPct: Int,
+        token: CancellationToken,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
@@ -513,7 +536,8 @@ class AppState(val store: H2Store) {
             userText = prompt,
             previousResponseId = prev,
             onDelta = onDelta,
-            onReasoning = onReasoning
+            onReasoning = onReasoning,
+            token = token
         )
         s.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
         if (turn.responseId != null) s.previousResponseId = turn.responseId
@@ -530,6 +554,7 @@ class AppState(val store: H2Store) {
     private fun runToolTurn(
         s: SessionState,
         shrinkPct: Int,
+        token: CancellationToken,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit
     ): Turn {
@@ -565,7 +590,7 @@ class AppState(val store: H2Store) {
             // as tool observations accumulate.
             turnSource = ResponsesTurnSource(
                 ResponsesClient(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct),
-                config.contextKeepRecentMessages
+                config.contextKeepRecentMessages, token = token
             ),
 
             registry = ToolRegistry(tools),

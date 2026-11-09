@@ -67,6 +67,10 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         wrapStyleWord = true
     }
     private val sendButton = JButton(Texts[Key.SendButton])
+    private val stopButton = JButton(Texts[Key.StopButton]).apply {
+        isEnabled = false
+        addActionListener { stop() }
+    }
     private val newSessionButton = JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } }
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
     /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
@@ -170,12 +174,19 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private var busy = false
 
+    /** The worker running the turn in flight, so [stop] can interrupt it; null between turns. */
+    private var worker: Thread? = null
+
+    /** Set by [stop] so the catch path reports a stopped turn rather than a failure. */
+    @Volatile private var cancelled = false
+
     /** Fired when the list of conversations may have changed, so the sidebar can re-render. */
     var onSessionsChanged: () -> Unit = {}
 
     init {
         val buttons = JPanel(WrapLayout(FlowLayout.LEFT, 4, 0))
         buttons.add(sendButton)
+        buttons.add(stopButton)
         buttons.add(newSessionButton)
         buttons.add(JButton(Texts[Key.CompactButton]).apply { addActionListener { compact() } })
 
@@ -356,6 +367,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun setBusy(b: Boolean) {
         busy = b
         sendButton.isEnabled = !b
+        stopButton.isEnabled = b
         newSessionButton.isEnabled = !b
         status.foreground = if (b) Color(160, 160, 160) else Color(120, 200, 130)
     }
@@ -363,6 +375,28 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun fail(msg: String) {
         status.foreground = Color(235, 110, 110)
         status.text = msg
+    }
+
+    /**
+     * Abandon the turn in flight. It closes the live socket through [AppState.cancelTurn], the
+     * authoritative stop because a read blocked on the backend ignores a thread interrupt, and
+     * interrupts the worker as a nudge for any wait that is interruptible. The partial answer
+     * already on screen is kept; only the rest is cut off.
+     */
+    private fun stop() {
+        if (!busy) return
+        cancelled = true
+        state.cancelTurn()
+        worker?.interrupt()
+    }
+
+    /** Close a turn the user stopped: keep what streamed in, mark the status as stopped. */
+    private fun stoppedTurn() {
+        lastRender?.flush()
+        append("\n\n")
+        status.foreground = Color(224, 178, 74)
+        status.text = Texts[Key.TurnStopped]
+        setBusy(false)
     }
 
     /**
@@ -390,7 +424,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // answer; callbacks fire on the worker thread, completion on the EDT.
         val render = TurnRender()
         lastRender = render
-        Thread {
+        val t = Thread {
             try {
                 // contextGuard is a cheap local estimate, so it runs here rather than on the
                 // EDT. Under the trimming strategies it stays silent and send bounds the window
@@ -402,15 +436,23 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 val turn = state.send(text, render::delta, render::reasoning)
                 SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
-                SwingUtilities.invokeLater { turnFailed(e) }
+                // A Stop interrupts this worker; that is a deliberate stop, not a backend failure,
+                // so it reports as such instead of scaring the user with an error.
+                if (cancelled || e is InterruptedException) SwingUtilities.invokeLater { stoppedTurn() }
+                else SwingUtilities.invokeLater { turnFailed(e) }
+            } finally {
+                worker = null
             }
-        }.start()
+        }
+        worker = t
+        t.start()
     }
 
     /** Take the busy lock and echo the prompt into the transcript before the reply. */
     private fun beginTurn(text: String) {
         input.text = ""
         resetThinking()
+        cancelled = false
         setBusy(true)
         status.text = Texts[Key.Streaming]
         append(Texts[Key.YouLabel], dim)

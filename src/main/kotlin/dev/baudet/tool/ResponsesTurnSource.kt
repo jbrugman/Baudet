@@ -1,5 +1,6 @@
 package dev.baudet.tool
 
+import dev.baudet.api.CancellationToken
 import dev.baudet.api.ResponsesClient
 import dev.baudet.api.Turn
 import dev.baudet.config.ContextStrategy
@@ -25,7 +26,9 @@ class ResponsesTurnSource(
     /** The token budget the window trims to; 0 means the window is unknown, which leaves it whole. */
     private val budgetTokens: Long = 0L,
     /** Turns before the current one that keep-last-N sends back; ignored by the other strategies. */
-    private val keepRecent: Int = Int.MAX_VALUE
+    private val keepRecent: Int = Int.MAX_VALUE,
+    /** Cancellation handle for the turn this source drives, so a Stop closes its in-flight request. */
+    private val token: CancellationToken = CancellationToken.NONE
 ) : TurnSource {
 
     override fun nextTurn(
@@ -41,6 +44,8 @@ class ResponsesTurnSource(
             history, strategy, budgetTokens,
             underServerSession = previousResponseId != null, keepRecent = keepRecent
         )
-        return client.turn(system, prior, userText, previousResponseId, tools, onDelta, onReasoning)
+        return client.turn(
+            system, prior, userText, previousResponseId, tools, onDelta, onReasoning, token = token
+        )
     }
 }
