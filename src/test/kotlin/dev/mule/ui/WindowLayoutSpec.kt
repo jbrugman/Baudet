@@ -23,4 +23,26 @@ class WindowLayoutSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a remembered dialog size") {
+        `when`("nothing was remembered") {
+            then("the fallback opens the dialog") {
+                WindowLayout.resolveDialogSize(remembered = 0, fallback = 560) shouldBe 560
+            }
+        }
+        `when`("a size was remembered") {
+            then("it is restored verbatim") {
+                WindowLayout.resolveDialogSize(remembered = 800, fallback = 560) shouldBe 800
+            }
+        }
+        `when`("a just-closed dialog is measured") {
+            then("a size at or above the minimum is worth remembering") {
+                WindowLayout.shouldRememberDialogSize(width = 640, height = 420, min = 200) shouldBe true
+            }
+            then("a squashed dialog is never remembered as the new default") {
+                WindowLayout.shouldRememberDialogSize(width = 120, height = 420, min = 200) shouldBe false
+                WindowLayout.shouldRememberDialogSize(width = 640, height = 90, min = 200) shouldBe false
+            }
+        }
+    }
 })

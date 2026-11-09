@@ -64,7 +64,7 @@ fun main(args: Array<String>) {
     SwingUtilities.invokeLater {
         val frame = JFrame("Mule · local coding-assistant")
         frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
-        applySavedBounds(frame, state.config)
+        applySavedSize(frame, state.config)
         frame.iconImages = AppIcon.images()
 
         var shown = Texts.language
@@ -100,6 +100,10 @@ fun main(args: Array<String>) {
         })
 
         frame.isVisible = true
+        // Position is restored only after the window is shown: on macOS a location set
+        // before the native peer exists is ignored, so the window kept landing at the same
+        // cascade point each launch even though its size remembered fine.
+        applySavedLocation(frame, state.config)
     }
 }
 
@@ -141,7 +145,8 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
     // file tree. Each toolbar toggle owns one divider, so either side panel collapses on its own.
     val left = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, tabs).apply {
         dividerLocation = WindowLayout.resolveDivider(previous?.left?.dividerLocation, state.config.leftDivider, 280)
-        resizeWeight = 0.2
+        resizeWeight = 0.0            // the sidebar keeps its width; the chat absorbs resizing,
+                                     // so hiding the file tree never widens the sidebar
         isContinuousLayout = true
         isOneTouchExpandable = false   // replaced by the toolbar toggle, which stays put when collapsed
     }
@@ -172,20 +177,31 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
 }
 
 /**
- * Size and place the frame from saved geometry, falling back to a centered default when
- * nothing usable is stored or the remembered spot no longer intersects any screen. No
- * maximized state is kept: restoring one behaves inconsistently across window managers,
- * so it is left out on purpose.
+ * Size the frame from saved geometry before the panels are built, so the split dividers
+ * lay out against the width the user left the window at. A zero size means nothing was
+ * stored, which is the first launch, so it opens at a centered default. Placement is kept
+ * separate and applied after the window is shown, in [applySavedLocation]. No maximized
+ * state is kept: restoring one behaves inconsistently across window managers.
  */
-private fun applySavedBounds(frame: JFrame, config: AppConfig) {
+private fun applySavedSize(frame: JFrame, config: AppConfig) {
+    val width = config.windowWidth
+    val height = config.windowHeight
+    frame.size = if (width <= 0 || height <= 0) Dimension(1040, 720) else Dimension(width, height)
+}
+
+/**
+ * Place the frame where the user left it, once it is displayable. Run after the window is
+ * shown, because a location set before the native peer exists is ignored on macOS and the
+ * window would otherwise reopen at the same default spot every launch. A remembered spot
+ * that no longer intersects any screen, or none stored at all, falls back to center.
+ */
+private fun applySavedLocation(frame: JFrame, config: AppConfig) {
     val width = config.windowWidth
     val height = config.windowHeight
     if (width <= 0 || height <= 0) {
-        frame.size = Dimension(1040, 720)
         frame.setLocationRelativeTo(null)
         return
     }
-    frame.setSize(width, height)
     val saved = Rectangle(config.windowX, config.windowY, width, height)
     val visible = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
     if (visible.intersects(saved)) frame.setLocation(config.windowX, config.windowY)

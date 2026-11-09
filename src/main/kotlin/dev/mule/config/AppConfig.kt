@@ -64,7 +64,14 @@ data class AppConfig(
     var windowHeight: Int = 0,
     /** Remembered split widths so a rebuild, such as a language change, keeps the user layout. */
     var leftDivider: Int = 0,
-    var rightDivider: Int = 0
+    var rightDivider: Int = 0,
+    /**
+     * The size the user last left the diff viewer at, so a patch reopens at a size they
+     * chose rather than the small default. Zero means never stored, which lets the viewer
+     * fall back to its own default on the first open.
+     */
+    var diffPopupWidth: Int = 0,
+    var diffPopupHeight: Int = 0
 ) {
     /** Key resolution: UI input wins, then the environment. Never hardcoded. */
     fun resolvedApiKey(): String =

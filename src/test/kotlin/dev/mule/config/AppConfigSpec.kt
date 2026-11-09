@@ -108,12 +108,15 @@ class AppConfigSpec : BehaviorSpec({
                 cfg.windowHeight shouldBe 0
                 cfg.leftDivider shouldBe 0
                 cfg.rightDivider shouldBe 0
+                cfg.diffPopupWidth shouldBe 0
+                cfg.diffPopupHeight shouldBe 0
             }
         }
         `when`("geometry round-trips through the stored form") {
             val cfg = AppConfig(
                 windowX = 80, windowY = 60, windowWidth = 1040,
-                windowHeight = 720, leftDivider = 280, rightDivider = 700
+                windowHeight = 720, leftDivider = 280, rightDivider = 700,
+                diffPopupWidth = 900, diffPopupHeight = 640
             )
             val back = json.decodeFromString(
                 AppConfig.serializer(), json.encodeToString(AppConfig.serializer(), cfg)
@@ -125,6 +128,8 @@ class AppConfigSpec : BehaviorSpec({
                 back.windowHeight shouldBe 720
                 back.leftDivider shouldBe 280
                 back.rightDivider shouldBe 700
+                back.diffPopupWidth shouldBe 900
+                back.diffPopupHeight shouldBe 640
             }
         }
     }

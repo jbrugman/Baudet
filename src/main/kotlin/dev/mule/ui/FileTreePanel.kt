@@ -236,7 +236,9 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         val rel = gitRel(path)
         if (rel.isEmpty()) return
         if (!gitStatus.isRepository) {
-            DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit])
+            DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), Texts[Key.DiffNoGit],
+                state.config.diffPopupWidth, state.config.diffPopupHeight)
+                { w, h -> state.updateDiffPopupSize(w, h) }
             return
         }
         val patch = git.diffPatch(root, rel)
@@ -246,7 +248,9 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
                 NewFileDiff.body(rel, Texts.fmt(Key.DiffUntracked, rel), readBytesOrNull(path))
             else -> Texts.fmt(Key.DiffNoChanges, rel)
         }
-        DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), body)
+        DiffViewDialog.open(tree, Texts.fmt(Key.DiffTitle, rel), body,
+            state.config.diffPopupWidth, state.config.diffPopupHeight)
+            { w, h -> state.updateDiffPopupSize(w, h) }
     }
 
     /** The bytes of [path] when it is a regular file, else null so [NewFileDiff] keeps just the message. */

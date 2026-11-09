@@ -17,6 +17,7 @@ import dev.mule.store.SessionSummary
 import dev.mule.tool.CallExtractor
 import dev.mule.tool.EditFileTool
 import dev.mule.tool.ExecuteTool
+import dev.mule.tool.GitTool
 import dev.mule.tool.ReadFileTool
 import dev.mule.tool.LoopOutcome
 import dev.mule.tool.PromptedCallExtractor
@@ -118,6 +119,16 @@ class AppState(val store: H2Store) {
             leftDivider = left,
             rightDivider = right
         )
+        store.save(config)
+    }
+
+    /**
+     * Remember the size the user left the diff viewer at, so the next patch opens at that
+     * size instead of the small default. Like [updateWindowGeometry] it rides in the same
+     single-row JSON blob, so no schema is touched.
+     */
+    fun updateDiffPopupSize(width: Int, height: Int) {
+        config = config.copy(diffPopupWidth = width, diffPopupHeight = height)
         store.save(config)
     }
 
@@ -319,12 +330,14 @@ class AppState(val store: H2Store) {
             ?: error("runToolTurn invoked without a gated project") // toolsActive() has gated this
         val writable = project.isGranted(FolderPermission.Write)
         val executable = project.isGranted(FolderPermission.Execute)
+        val readGranted = project.isGranted(FolderPermission.Read)
         val context = ToolContext(
             root = Paths.get(project.folderPath!!),
             writeGranted = writable,
             approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
             execGranted = executable,
-            approveCommand = approveCommand
+            approveCommand = approveCommand,
+            readGranted = readGranted
         )
         // The wire format is model-facing, so it joins the English system prompt only
         // when tools are live; a plain or tool-less turn never mentions it.
@@ -335,6 +348,7 @@ class AppState(val store: H2Store) {
                 add(ReadFileTool())
                 if (writable) add(EditFileTool())
                 if (executable) add(ExecuteTool())
+                if (readGranted) add(GitTool())
             }),
             extractor = PromptedCallExtractor(),
             maxIterations = config.maxToolIterations,
