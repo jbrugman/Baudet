@@ -70,8 +70,14 @@ class ExecuteTool : Tool {
         // admits a command SafeCommands proves read-only. Anything else is confirmed by a person, since
         // a subprocess cannot be fenced by the folder boundary the way a file write can. The list is
         // asked for here rather than at the start of the turn, so a pin granted a moment ago counts now.
+        // A third route: a command family the user explicitly trusted. Its key is the bare program, or
+        // git plus its subcommand, and only exists when SafeCommands clears the command's shape, so this
+        // stops the nag for a repeated build or commit whose text varies while a chain or a payload tool
+        // still signs verbatim and still prompts. It can never widen trust past what the user named.
+        val trusted = CommandSignature.trustedEntry(command)
         val preApproved = CommandSignature.pinned(command) in ctx.autoAllow() ||
-            (ctx.autoApproveSafe && SafeCommands.isSafe(command))
+            (ctx.autoApproveSafe && SafeCommands.isSafe(command)) ||
+            (trusted != null && trusted in ctx.trustedCommands())
         if (!preApproved && !ctx.approveCommand(command, cwd.toString(), timeout))
             return ToolResult(ok = false, output = "run_command: the user declined to run this command")
 

@@ -67,4 +67,61 @@ class CommandSignatureSpec : BehaviorSpec({
             }
         }
     }
+
+    /*
+     * A local model rewords the same command turn after turn -- an extra space here, a padded chain there.
+     * A verbatim pin that misses on spacing is the nag this removes. Folding runs of spaces and tabs cannot
+     * merge tokens or split one, so it forgets only horizontal spacing the shell ignores and never turns a
+     * read into a write; a chain still folds to its own whole text, not to its leading program.
+     */
+    given("spellings that differ only in whitespace") {
+        `when`("pinned") {
+            then("they collapse to one text, so one Always keeps holding over reworded spacing") {
+                CommandSignature.pinned("pwd  &&   ls -la") shouldBe "pwd && ls -la"
+                CommandSignature.pinned("mvn   -B    test") shouldBe "mvn -B test"
+            }
+        }
+    }
+
+    /*
+     * The trusted family is the second route an Always can take: a bare program, or git plus its subcommand,
+     * whenever the gate clears that shape. A command it cannot clear is granted no family and keeps falling
+     * back to its verbatim pin, so family trust never reaches past the single program the user named.
+     */
+    given("a command asked for its trusted family") {
+        `when`("the program is safe to vouch for") {
+            then("a family key is granted, so one Always covers the repeated build or commit") {
+                CommandSignature.trustedEntry("mvn clean verify") shouldBe "mvn"
+                CommandSignature.trustedEntry("git commit -m x") shouldBe "git commit"
+            }
+        }
+        `when`("the program is not") {
+            then("no family is granted, so it falls back to a verbatim pin") {
+                (CommandSignature.trustedEntry("rm -rf x") == null) shouldBe true
+                (CommandSignature.trustedEntry("bash -c x") == null) shouldBe true
+            }
+        }
+    }
+
+    /*
+     * A newline is a shell command separator, not spacing to forget: a second line is a second
+     * command. Folding it away would let a read the gate vouches for drag a hidden write into a silent
+     * Always, so a newline is left intact and the whole line keeps only its verbatim pin, never a family.
+     */
+    given("a command carrying a newline") {
+        val nl = 10.toChar().toString()
+        val tab = 9.toChar().toString()
+        `when`("pinned") {
+            then("the newline survives, so it is never mistaken for one folded harmless line") {
+                CommandSignature.pinned("git status" + nl + "touch x").contains(nl) shouldBe true
+            }
+            then("a trusted read on the first line cannot vouch for a write riding the second") {
+                CommandSignature.pinned("git status" + nl + "touch x") shouldNotBe
+                    CommandSignature.pinned("git status")
+            }
+            then("horizontal spacing still folds, so a mere reword is not punished") {
+                CommandSignature.pinned("mvn" + tab + "-B" + tab + "test") shouldBe "mvn -B test"
+            }
+        }
+    }
 })

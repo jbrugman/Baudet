@@ -49,6 +49,14 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
     }
 
+    private val trustedArea = JTextArea(6, 34).apply {
+        font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+    }
+    private val autoAllowArea = JTextArea(6, 34).apply {
+        isEditable = false
+        font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+    }
+
     private val probeOut = JTextArea(10, 34).apply {
         isEditable = false
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
@@ -108,19 +116,62 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         buttons.add(JButton(Texts[Key.TestButton]).apply { toolTipText = Texts[Key.TipTest]; addActionListener { test() } })
         buttons.add(JButton(Texts[Key.ReloadButton]).apply { toolTipText = Texts[Key.TipReload]; addActionListener { reload() } })
 
-        val north = JPanel(BorderLayout())
-        north.add(form, BorderLayout.NORTH)
-        north.add(buttons, BorderLayout.SOUTH)
+        // A manager for command trust, so the user can see and edit what a repeated build or commit is
+        // relying on: the editable trusted families above, and the read-only always-allow pins below.
+        val commandPanel = JPanel(BorderLayout())
+        commandPanel.border = BorderFactory.createTitledBorder(Texts[Key.CommandManagerTitle])
+        trustedArea.toolTipText = Texts[Key.TrustedPrefixesHint]
+        autoAllowArea.toolTipText = Texts[Key.AlwaysAllowHint]
+        commandPanel.add(
+            formPanel(
+                listOf(
+                    Texts[Key.TrustedPrefixesLabel] to scrollingField(trustedArea),
+                    Texts[Key.AlwaysAllowLabel] to scrollingField(autoAllowArea)
+                )
+            ),
+            BorderLayout.NORTH
+        )
+        val commandButtons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
+        commandButtons.add(JButton(Texts[Key.ApplyTrustedButton]).apply { toolTipText = Texts[Key.TipApplyTrusted]; addActionListener { applyTrusted() } })
+        commandButtons.add(JButton(Texts[Key.ClearTrustedButton]).apply { toolTipText = Texts[Key.TipClearTrusted]; addActionListener { clearTrusted() } })
+        commandButtons.add(JButton(Texts[Key.ClearAlwaysButton]).apply { toolTipText = Texts[Key.TipClearAlways]; addActionListener { clearAlways() } })
+        commandPanel.add(commandButtons, BorderLayout.SOUTH)
 
-        add(north, BorderLayout.NORTH)
-        add(
+        // Everything the user edits lives in one scrollable body, so a short window never pushes the Save
+        // button or the trust manager off screen: form, command manager and diagnostics stack and scroll
+        // together, while the action buttons and the status line stay pinned along the bottom.
+        val body = JPanel(java.awt.GridBagLayout())
+        val addBodyRow: (java.awt.Component) -> Unit = { component ->
+            val constraints = java.awt.GridBagConstraints().apply {
+                gridx = 0
+                gridwidth = java.awt.GridBagConstraints.REMAINDER
+                weightx = 1.0
+                weighty = 0.0
+                fill = java.awt.GridBagConstraints.HORIZONTAL
+                anchor = java.awt.GridBagConstraints.NORTHWEST
+            }
+            body.add(component, constraints)
+        }
+        addBodyRow(form)
+        addBodyRow(commandPanel)
+        addBodyRow(
             javax.swing.JScrollPane(probeOut).apply {
                 border = BorderFactory.createTitledBorder(Texts[Key.Diagnostics])
+            }
+        )
+        add(
+            javax.swing.JScrollPane(body).apply {
+                border = null
+                horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
             },
             BorderLayout.CENTER
         )
+
         status.isEditable = false
-        add(status, BorderLayout.SOUTH)
+        val southPanel = JPanel(BorderLayout())
+        southPanel.add(buttons, BorderLayout.NORTH)
+        southPanel.add(status, BorderLayout.CENTER)
+        add(southPanel, BorderLayout.SOUTH)
 
         reload()
     }
@@ -168,7 +219,37 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxIterations.text = c.maxToolIterations.toString()
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
+        reloadCommandLists()
         updateEnabled()
+    }
+
+    /** Refill the command-trust panels from the live lists, so a decision taken elsewhere shows up here. */
+    private fun reloadCommandLists() {
+        trustedArea.text = state.trustedCommands().sorted().joinToString("\n")
+        autoAllowArea.text = state.allowedCommands().sorted().joinToString("\n")
+    }
+
+    /**
+     * Persist the trusted families typed in the box. Each line is canonicalised through the same gate the
+     * Always button uses, so a hand-typed shell, interpreter or chain is dropped rather than trusted, and
+     * the count of dropped lines is reported back on the status line.
+     */
+    private fun applyTrusted() {
+        val lines = trustedArea.text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        val dropped = state.replaceTrustedCommands(lines)
+        reloadCommandLists()
+        status.foreground = if (dropped == 0) Color(120, 200, 130) else Color(230, 180, 100)
+        status.text = Texts.fmt(Key.TrustedDropped, dropped)
+    }
+
+    private fun clearTrusted() {
+        state.clearTrustedCommands()
+        reloadCommandLists()
+    }
+
+    private fun clearAlways() {
+        state.clearAllowedCommands()
+        reloadCommandLists()
     }
 
     private fun fail(m: String) {

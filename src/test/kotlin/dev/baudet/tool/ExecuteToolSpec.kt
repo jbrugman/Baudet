@@ -228,4 +228,49 @@ class ExecuteToolSpec : BehaviorSpec({
             }
         }
     }
+
+    /*
+     * The trusted family is the third route that skips the prompt: a program the user explicitly vouched
+     * for. It must cover the reworded repeat that caused the nag, yet never reach past the gate -- a family
+     * the gate itself refuses, such as an in-place editor, can never match, so a hand-typed entry cannot
+     * turn a repeated read into an unattended write.
+     */
+    given("a context that trusts a command family") {
+        val root = newRoot("baudet-exec-trusted")
+        `when`("a command of a trusted family runs with the approver set to deny") {
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, trustedCommands = { setOf("true") }
+            )
+            then("it runs, because its family was trusted even though the exact text differs") {
+                val result = tool.execute(commandArgs("true extra"), ctx)
+                result.ok shouldBe true
+                result.output shouldContain "exit code: 0"
+            }
+        }
+        `when`("a blocklisted program is handed a trusted entry anyway") {
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, trustedCommands = { setOf("sed") }
+            )
+            then("it is declined, because a family the gate cannot clear can never match a run") {
+                val result = tool.execute(commandArgs("sed -n 1p notes.txt"), ctx)
+                result.ok shouldBe false
+                result.output shouldContain "declined"
+            }
+        }
+        `when`("a trusted family is handed a command that rides a second line") {
+            val nl = 10.toChar().toString()
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, trustedCommands = { setOf("git status") }
+            )
+            then("it is declined, so a trusted first line never drags a hidden second command into the run") {
+                val result = tool.execute(commandArgs("git status" + nl + "touch proof.txt"), ctx)
+                result.ok shouldBe false
+                result.output shouldContain "declined"
+                Files.notExists(root.resolve("proof.txt")) shouldBe true
+            }
+        }
+    }
 })

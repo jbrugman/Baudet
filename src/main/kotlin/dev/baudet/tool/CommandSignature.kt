@@ -23,9 +23,24 @@ object CommandSignature {
      * sides never drift.
      */
     fun pinned(command: String): String {
-        val trimmed = command.trim()
-        return if (SafeCommands.isSafe(trimmed)) signature(trimmed) else trimmed
+        // Fold runs of spaces and tabs only, so a command that differs from another merely by padding pins
+        // and matches as one text: a chain trusted verbatim should not nag again because the model padded
+        // its spacing. A newline is deliberately left intact. Run through a shell it separates two commands,
+        // so one that survives the trim marks a genuine second command; it must keep that meaning and be
+        // refused by the read-only gate below, never folded into one harmless-looking line that a family
+        // or signature would then vouch for.
+        val canonical = command.trim().replace(Regex("[ \\t]+"), " ")
+        return if (SafeCommands.isSafe(canonical)) signature(canonical) else canonical
     }
+
+    /**
+     * The trusted family key for [command], if it has one: the bare program, or git plus its subcommand,
+     * only when [SafeCommands.trustedKey] judges that family safe to vouch for. A non-null key is what a
+     * single Always stores in the trusted list and what a later run is matched against, so store and check
+     * share one definition and never drift. Null means the command has no safe family: it keeps its
+     * verbatim pin from [pinned], so a shell, a payload tool or a chain is trusted exactly as approved.
+     */
+    fun trustedEntry(command: String): String? = SafeCommands.trustedKey(command)
 
     /**
      * The reusable signature of a command the gate already proved read-only: its program, its subcommand

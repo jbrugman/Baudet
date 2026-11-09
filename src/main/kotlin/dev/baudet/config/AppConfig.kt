@@ -84,6 +84,15 @@ data class AppConfig(
      * asks for every command; the user turns it on deliberately to stop being nagged over harmless ones.
      */
     var autoApproveSafeCommands: Boolean = false,
+    /**
+     * Command families the user chose to trust, each a bare program (mvn) or a git program and
+     * subcommand (git commit). A single simple command runs without a prompt when its family key, as
+     * [dev.baudet.tool.SafeCommands.trustedKey] computes it, equals one entry here and carries no write,
+     * exec or escape flag. The key is never broader than the program the user named, and a family this
+     * gate cannot clear (a shell, an interpreter, a deleting tool) yields no key, so a bad entry can
+     * never match a real run. Off by empty; distinct from [autoAllowCommands], which pins whole commands.
+     */
+    var trustedCommands: MutableList<String> = mutableListOf(),
 
     /** Blank = the built-in English default (model-facing, never translated); typed text always wins. */
     var systemPrompt: String = "",
