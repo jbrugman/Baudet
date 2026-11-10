@@ -1,7 +1,7 @@
 package dev.baudet.tool
 
 import dev.baudet.api.CancellationToken
-import dev.baudet.api.ResponsesClient
+import dev.baudet.api.ModelGateway
 import dev.baudet.api.Turn
 import dev.baudet.config.ContextStrategy
 import dev.baudet.session.Msg
@@ -15,7 +15,7 @@ import dev.baudet.session.Msg
  * one continuous reply.
  */
 class ResponsesTurnSource(
-    private val client: ResponsesClient,
+    private val gateway: ModelGateway,
     private val system: String,
     /**
      * The caller's context policy, handed down so every turn this source builds is bounded by the
@@ -44,7 +44,7 @@ class ResponsesTurnSource(
             history, strategy, budgetTokens,
             underServerSession = previousResponseId != null, keepRecent = keepRecent
         )
-        return client.turn(
+        return gateway.turn(
             system, prior, userText, previousResponseId, tools, onDelta, onReasoning, token = token
         )
     }

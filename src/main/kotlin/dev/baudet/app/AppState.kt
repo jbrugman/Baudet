@@ -3,7 +3,8 @@ package dev.baudet.app
 import dev.baudet.api.BackendException
 import dev.baudet.api.CancellationToken
 import dev.baudet.api.ModelWindows
-import dev.baudet.api.ResponsesClient
+import dev.baudet.api.ModelGateway
+import dev.baudet.api.ResponsesGateway
 import dev.baudet.api.Turn
 import dev.baudet.config.AppConfig
 import dev.baudet.config.ContextStrategy
@@ -43,6 +44,13 @@ import java.nio.file.Paths
 class AppState(val store: H2Store) {
 
     var config: AppConfig = store.load() ?: AppConfig()
+
+    /**
+     * Builds the transport for one turn. It is a factory rather than a single instance so
+     * every turn reads the current config, and injectable so the run, stop and persist flow can
+     * be driven against a scripted backend in tests without a live server.
+     */
+    var gatewayFactory: (AppConfig) -> ModelGateway = { ResponsesGateway(it) }
     var session: SessionState = SessionState(SessionIds.new(), config.model, null)
 
     /**
@@ -638,7 +646,7 @@ class AppState(val store: H2Store) {
         val streamed = StringBuilder()
         val onText: (String) -> Unit = { chunk -> streamed.append(chunk); onDelta(chunk) }
         val turn = try {
-            ResponsesClient(config).turn(
+            gatewayFactory(config).turn(
                 system = instructionsFor(s),
                 history = prior,
                 userText = prompt,
@@ -713,7 +721,7 @@ class AppState(val store: H2Store) {
             // request the loop fires -- not only the first -- is capped to the configured budget
             // as tool observations accumulate.
             turnSource = ResponsesTurnSource(
-                ResponsesClient(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct),
+                gatewayFactory(config), system, config.contextStrategy, trimBudgetTokens(shrinkPct),
                 config.contextKeepRecentMessages, token = token
             ),
 
@@ -725,14 +733,27 @@ class AppState(val store: H2Store) {
         )
         // The sink appends each assistant message and tool observation as the loop produces
         // them, so a later failure cannot discard a real edit already made on disk.
-        val outcome = loop.run(
-            history = outbound(s, shrinkPct),
-            previousResponseId = chainedPrev(s),
-            ctx = context,
-            onDelta = onDelta,
-            onReasoning = onReasoning,
-            onMessage = { s.messages.add(it) }
-        )
+        val streamed = StringBuilder()
+        val onText: (String) -> Unit = { chunk -> streamed.append(chunk); onDelta(chunk) }
+        val outcome = try {
+            loop.run(
+                history = outbound(s, shrinkPct),
+                previousResponseId = chainedPrev(s),
+                ctx = context,
+                onDelta = onText,
+                onReasoning = onReasoning,
+                // Committed text already sits in the session, and a tool observation carries none,
+                // so clearing the buffer here leaves exactly the in-flight partial for a stop.
+                onMessage = { streamed.setLength(0); s.messages.add(it) }
+            )
+        } catch (e: Exception) {
+            // A Stop can surface as a closed-stream IOException rather than a clean cancellation,
+            // so keeping the half answer keys off the stop itself, not the exception type: a stopped
+            // tool turn keeps its partial so the next instruction can steer, while any other failure
+            // keeps nothing and lets the caller drop the unanswered turn, as on the plain path.
+            if (token.isCancelled) persistStoppedPartial(s, streamed.toString())
+            throw e
+        }
         if (outcome.responseId != null) s.previousResponseId = outcome.responseId
         return when (outcome) {
             is LoopOutcome.Completed ->
@@ -757,7 +778,10 @@ class AppState(val store: H2Store) {
             // The window is handed in rather than looked up here, so the fold is guarded against the
             // same number the turn guard is: the one this backend proved, or the table's estimate for
             // this model. Two ceilings that disagree is how a fold overflows on a small model.
-            val s = Compactor(config, contextWindowTokens()).compact(session, keepLast, onDelta)
+            val gateway = gatewayFactory(config)
+            val s = Compactor(config, contextWindowTokens()) { source, delta ->
+                gateway.completeOnce(Compactor.SUMMARY_SYSTEM_PROMPT, source, Compactor.SUMMARY_TOKENS, delta)
+            }.compact(session, keepLast, onDelta)
             persist()
             return s
         } finally {
