@@ -1,0 +1,36 @@
+@startuml turn-decision
+title Decision routes of one turn (AppState.send)
+skinparam shadowing false
+start
+:send(userText);
+if (turnLock CAS from false to true ?) then (no)
+  :throw IllegalStateException: a turn is already running;
+  stop
+else (yes)
+endif
+:new CancellationToken, activeToken = token, messages += user;
+if (contextGuard() says too large (StopAtLimit only) ?) then (too large)
+  :ContextTooLong: nothing sent, the typed text is kept;
+  :finally: activeToken = null, turnLock = false;
+  stop
+else (ok)
+endif
+:shrinkPct = 100, attempt = 0;
+repeat
+  if (toolGate() == Active ?) then (Active)
+    :build tools from rights (Read / Edit / Execute / Git)\nplus protocolFor(the same set);
+    :ToolLoop.run(...) - see tool-loop.puml;
+  else (Disabled / NoProject / NoFolder / NoWrite)
+    :runPlainTurn: ResponsesClient.turn(...);
+    note right: a deliberate stop keeps the partial answer\nso the next send can steer
+  endif
+  if (succeeded, or not a retryable overflow ?) then (done)
+    break
+  else (retryable overflow)
+    :learnContextWindow(claimed), shrinkPct x60%, attempt++\n(contextOverflow, strategy not StopAtLimit,\nnothing appended, attempt under 2);
+  endif
+repeat while (attempt under 2 ?) is (yes)
+:failure: drop the prompt if nothing was appended,\nelse keep the actions and reset previousResponseId;
+:finally: activeToken = null, turnLock = false;
+stop
+@enduml

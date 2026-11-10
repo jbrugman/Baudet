@@ -1,0 +1,52 @@
+@startuml tool-loop
+title ToolLoop.run (per iteration, up to maxIterations)
+skinparam shadowing false
+start
+repeat
+  :ResponsesTurnSource: outbound and trim into the request;
+  if (contextCeiling reached (server-session, cannot trim) ?) then (yes)
+    :stop cleanly, no surely-refused call\nyields LoopOutcome.CapReached;
+    stop
+  else (no)
+  endif
+  :Turn arrives (native calls plus fenced JSON);
+  if (CallExtractor found calls ?) then (none)
+    :final answer, yields LoopOutcome.Completed;
+    stop
+  else (calls)
+  endif
+  while (more calls ?) is (yes)
+    if (tool right ?) then (no)
+      :observation: no right;
+    else (yes)
+      if (EditFileTool and ToolMode = Ask ?) then (yes)
+        :approveEdit(diff) on the EDT, deny by default;
+        if (agreed ?) then (yes)
+          :write within FolderBoundary;
+        else (no)
+          :observation: refused;
+        endif
+      else (no)
+        if (ExecuteTool ?) then (yes)
+          if (read-only SafeCommands, pin, or trusted family ?) then (yes)
+            :execute;
+          else (no)
+            :approveCommand on the EDT, deny by default (always required);
+            if (agreed ?) then (yes)
+              :execute;
+            else (no)
+              :observation: refused;
+            endif
+          endif
+        else (no)
+          :run the tool (read / git);
+        endif
+      endif
+    endif
+  endwhile (no)
+  :feed every observation back to the session;
+repeat while (iterations left ?) is (yes)
+:maxIterations exhausted: one settle turn lets it answer in prose,
+still wanting to act yields LoopOutcome.CapReached;
+stop
+@enduml

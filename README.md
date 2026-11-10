@@ -42,8 +42,9 @@ stored, not hardcoded.
 It speaks the OpenAI **Responses API** by default, with the Chat Completions
 shape tolerated as a fallback.
 
-It keeps the server-side session: each turn sends `previous_response_id`, so
-the backend carries the context instead of the client resending it. 
+By default the client bounds and replays recent history itself; the backend carries
+the context through `previous_response_id` only under the Stop at limit strategy with
+the send-response-id option on.
 Settings, projects and transcripts are persisted locally in an embedded H2 database.
 
 ## Why it was started
@@ -80,56 +81,36 @@ from a chat client toward a coding assistant.
 
 Working:
 
-- list models, pick one, save settings
-- streaming chat over `/v1/responses` with a server-side session
-- **Stop** ends a running turn for real: it closes the stream still open on the backend, so a read
-  blocked waiting for the next event releases at once, and it keeps whatever already streamed
-  instead of saving a half answer
-- **Steer**: type and send while a turn is still running, and your new instruction is not lost -- the
-  partial answer stays, that turn is cut, and the instruction goes out as the next message the moment
-  the cut lands, with no second press and no manual stop first
-- reasoning never enters the transcript: it fills a closable dock above the input, as tall as
-  the input itself, opens on its own the first time a turn thinks out loud, and stays closed for
-  the rest of that turn when you close it; it is display-only and never sent back to the model
-- answers are styled — fenced blocks, headings, bullets, bold, italic and inline code — while
-  links, tables and nested emphasis stay literal, underscores are never emphasis (identifiers
-  such as `max_output_tokens` must survive verbatim), and an unmatched marker is never removed
-- capability probe: what the backend *does* rather than what it accepts
-- persisted session: the last conversation is restored after a restart
-- client-side compaction
-- context-budget enforcement: a turn that would not fit is folded away automatically (or
-  refused if even that cannot make room), and a tool loop stops before firing a request the
-  backend would reject for being too long, rather than burning a turn on a doomed call
-- context strategy, chosen in Settings, decides what history leaves the app: **Keep last** (the
-  default) sends the system prompt plus the last N messages, N adjustable and 15 by default, a
-  Storyteller-style rolling window that never drops the system prompt; **Rolling window** fills as
-  much of the window as it can, oldest messages rolling off first, again with the system prompt always
-  leading; **Stop at limit** sends the transcript whole and refuses a turn that would not fit rather
-  than dropping context
-- UI text in English, Dutch, French or German, switchable at runtime (English is the default)
-- projects in a left sidebar, with conversations grouped under them and
-  per-folder read/write/execute grants: Read gates the file tree and the read-only git
-  tool, Write gates the edit tool, and Execute gates the shell tool
-- tools driven by the model — `read_file`, `edit_file`, `run_command` and a read-only
-  `git` — run in a tool loop, each offered only for the rights the selected project's
-  linked folder grants, with tools enabled; a folder that cannot be written is reported,
-  never silently skipped
-- `run_command` runs bash (and other interpreters) with the project folder as its working
-  directory and the system temp folder as `TMPDIR`; by default every command needs your
-  approval, even in Auto mode, because once bytes reach a shell the folder boundary is no
-  longer ours. You can dial that back two ways, both off until you switch them on: pin the
-  exact command you are shown with **Always allow**, or turn on auto-approval of plainly
-  read-only commands (`ls`, `cat`, `git status` and the like); anything that chains, redirects,
-  substitutes or deletes still asks
-- a project file tree on the right, following the selected project
-- the file tree colors each file by its git state — green changed, blue untracked,
-  red deleted (a ghost row when the file is gone from disk) — and double-clicking a
-  file opens its git patch, colored so added lines read green and removed lines red;
-  git here is read-only, it shows the change, it does not commit
-- the file tree watches its folder and refreshes itself when files change on disk,
-  keeping the folders you had open and your selection in place, so the colors and
-  the change list stay current while a model writes; the Refresh button still
-  forces a full re-read
+- list models, pick one, and save settings
+- streaming chat over `/v1/responses`, keeping the server-side session through
+  `previous_response_id`
+- **Stop** closes the stream still open on the backend, so a read waiting for the
+  next event releases at once; **Steer** sends your next instruction as soon as
+  the cut lands and keeps the partial answer so that instruction can steer
+- reasoning stays out of the transcript: it fills a closable dock above the input,
+  as tall as the input, and is display-only
+- answers render fenced blocks, headings, bullets, bold, italic and inline code, and
+  identifiers such as `max_output_tokens` survive verbatim
+- an honest capability probe reports what the backend *does*, not what it merely
+  accepts, and the last conversation is restored after a restart
+- context is bounded before it leaves the app: a **context strategy** (Keep last by
+  default, Rolling window, Stop at limit) picks the history, the system prompt always
+  leads, and a turn that cannot fit is folded or refused rather than sent doomed
+- a project sidebar groups conversations and gates tools by the linked folder's rights
+  (Read, Write, Execute); the tools are `read_file`, `edit_file`, `run_command` and a
+  read-only `git`, driven through a tool loop
+- `run_command` runs a shell in the project folder with `TMPDIR` set to the temp folder;
+  by default every command asks. Unattended auto-approval stays strictly read-only (a chain,
+  redirect, substitution or a payload tool such as `sed` is never auto-run). **Always allow**
+  records a reusable pin: a family signature for a provably read-only command, and, for a
+  command whose program the user vouches for and `SafeCommands` deems safe (such as `mvn` or
+  a `mvnw` or `gradlew` wrapper), a trusted family key, so later variations run without a
+  prompt. A chain, redirect or payload tool is never family-trusted and is trusted exactly
+  as approved
+- a file tree follows the selected project, colors each file by its git state (green
+  changed, blue untracked, red deleted), opens a colored git patch on double-click, and
+  refreshes itself when files change on disk
+- UI text in English, Dutch, French or German, switchable at runtime, English by default
 
 Not there yet:
 
@@ -147,6 +128,22 @@ Swing survives `native-image`, which is why not Compose Multiplatform;
 reflection; H2 instead of sqlite-jdbc because sqlite ships platform `.dylib`
 files that are guesswork under AOT; kotlinx-serialization for the same reason.
 JDK 25, matching the installed GraalVM CE 25.
+
+## Architecture
+
+The runtime is sketched in five PlantUML sources under `Docs/`, which you can open
+in any PlantUML viewer or render with `plantuml Docs/*.puml`:
+
+- [`components.puml`](Docs/components.puml) - the layers and who calls whom
+- [`sse-transport.puml`](Docs/sse-transport.puml) - one Responses call, streamed,
+  framed and accumulated into a Turn
+- [`turn-decision.puml`](Docs/turn-decision.puml) - how `AppState.send` routes,
+  retries and stops a turn
+- [`tool-loop.puml`](Docs/tool-loop.puml) - the model-driven tool loop and its
+  approval gates
+- [`compaction-fold.puml`](Docs/compaction-fold.puml) - the client-side compaction fold
+
+They track the code by hand. When you move a class, update the matching diagram.
 
 ## Build and run
 

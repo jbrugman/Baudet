@@ -1,0 +1,115 @@
+@startuml components
+skinparam componentStyle rectangle
+title Baudet - components and layers
+
+package "UI layer (Swing, EDT)" {
+  component "Main\nentry point, fun main" as MAIN
+  component "ChatPanel\ntranscript, composer, Stop, Steer\nand the reasoning dock" as CHAT
+  component "ProjectSidebar\nprojects, folder, rights" as PROJ
+  component "FileTreePanel\nproject tree, git colors" as TREE
+  component "ModelsPanel\nmodel list, pick" as MODELS
+  component "SettingsPanel\nsaveConfig" as SET
+  component "DiffViewDialog\ngit patch viewer" as DIFF
+}
+
+package "Orchestrator (blocking; worker thread)" {
+  component "AppState\nturnLock, activeToken\nsend / compact / cancelTurn\ngates + ceilings" as STATE
+}
+
+package "API layer" {
+  component "ResponsesClient\nbuildRequest / turn / completeOnce" as RC
+  component "ModelGateway\ntransport seam (interface)" as GW
+  component "ResponsesGateway\nforwards 1:1 to ResponsesClient" as GWI
+  component "Http\nPOST /responses, SSE" as HTTP
+  component "SseFramer" as FR
+  component "TurnAccumulator -> Turn\n(event-census, functionCalls)" as ACC
+  component "CancellationToken\nsocket-registry" as TOK
+  component "ModelWindows" as MW
+}
+
+package "Tool layer" {
+  component "ToolLoop" as TL
+  component "ResponsesTurnSource\n(Transcript + trim per request)" as SRC
+  component "ToolRegistry" as REG
+  component "CallExtractor <- PromptedCallExtractor\nnative + fenced JSON" as EXT
+  component "ToolContext\nrights, approvals, allow-lists" as CTX
+  component "FolderBoundary" as FB
+  component "SafeCommands / CommandSignature" as SAFE
+  component "ExecuteWorkspace" as WS
+  component "ReadFileTool" as T1
+  component "EditFileTool" as T2
+  component "ExecuteTool" as T3
+  component "GitTool" as T4
+}
+
+package "Context layer" {
+  component "SessionState" as SS
+  component "ContextTrimmer" as TRIM
+  component "Transcript (scrub, split, fit)" as TR
+  component "Compactor / CompactionPlan" as COMP
+}
+
+package "Domain" {
+  component "AppConfig" as CFG
+  component "Project + FolderPermission" as PRJ
+  component "ContextStrategy / ToolMode" as STRAT
+}
+
+package "Persistence" {
+  component "H2Store" as H2
+  component "ProjectStore" as PST
+}
+
+MAIN --> STATE
+MAIN ..> CHAT
+MAIN ..> PROJ
+MAIN ..> TREE
+MAIN ..> MODELS
+MAIN ..> SET
+CHAT --> STATE : send / compact / cancelTurn
+CHAT ..> STATE : installs approveEdit / approveCommand
+PROJ --> STATE
+TREE --> STATE
+MODELS --> STATE : pick model
+SET --> STATE : saveConfig
+TREE --> DIFF
+
+STATE --> GW : gatewayFactory
+GWI ..|> GW
+GWI --> RC
+STATE --> TL
+STATE --> COMP
+STATE --> SS
+STATE --> H2
+STATE --> MW
+
+RC --> HTTP
+HTTP --> FR
+RC --> ACC
+RC --> TOK
+TL --> SRC
+SRC --> GW
+TL --> REG
+TL --> EXT
+TL --> CTX
+REG --> T1
+REG --> T2
+REG --> T3
+REG --> T4
+T1 --> FB
+T2 --> FB
+T2 --> CTX
+T3 --> SAFE
+T3 --> WS
+T3 --> CTX
+T4 --> FB
+SRC --> TR
+SRC --> TRIM
+COMP --> GW
+TRIM --> SS
+H2 --> PST
+STATE --> CFG
+STATE --> PRJ
+CFG --> STRAT
+
+@enduml

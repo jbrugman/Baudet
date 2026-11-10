@@ -1,0 +1,48 @@
+@startuml compaction-fold
+title The compaction fold (AppState.compact -> Compactor.compact)
+start
+:AppState.compact(keepLast, onDelta);
+if (turnLock CAS false -> true ?) then (no)
+  :throw IllegalStateException;
+  stop
+endif
+:window = contextWindowTokens()\n(same window as the turn guard);
+:Compactor(config, window)\n.compact(session, keepLast, onDelta);
+if (CompactionPlan.splitAt(size, keepLast)\nsize <= keepLast ?) then (yes: nothing to fold)
+  :return state.summary (unchanged);
+else (no)
+  :maxChars = maxSourceChars()\nmin(48k, budget*3, window/2*3)\ncoerceAtLeast 4k;
+endif
+:summary = state.summary;\nremaining = messages[0..splitAt];\nfolded = 0; stop = false;
+while (not stop and remaining not empty ?) is (continue)
+  :foldBatch(remaining, summary.len, maxChars)\n(takes AT LEAST one turn);
+  :source = CompactionPlan.source(summary, batch);
+  if (source.length > maxChars ?) then (yes: single turn too big,\ncutting = silent loss)
+    :stop = true;\nkeep this + rest verbatim;
+  else (fits)
+    :turn = summarize(source, onDelta);
+    if (summarize threw ?) then (yes)
+      if (folded == 0 ?) then (yes)
+        :rethrow (outage != 'nothing');
+        stop
+      else (no)
+        :stop = true;\nkeep what already proved;
+      endif
+    else (no)
+      if (acceptsSummary(turn) ?\ntext != blank and\nincompleteReason == null\nand completed) then (no: truncated / lost)
+        :stop = true;\nthat batch stays verbatim;
+      else (yes)
+        :summary = turn.text.trim();\nfolded += batch.size;\nremaining = rest;
+      endif
+    endif
+  endif
+endwhile (stop or empty)
+if (folded == 0 ?) then (yes)
+  :return null\n(nothing proved -> nothing dropped);
+else (no)
+  :state.summary = summary;\nmessages[0..folded].clear();\npreviousResponseId = null;
+  :return summary;
+endif
+:finally: turnLock = false;\nthen AppState.persist();
+stop
+@enduml

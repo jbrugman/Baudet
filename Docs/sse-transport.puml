@@ -1,0 +1,72 @@
+@startuml sse-transport
+title SSE -> Turn transport (ResponsesClient.turn -> Http.sse -> SseFramer -> TurnAccumulator)
+start
+:ResponsesClient.turn(system, history, userText,\nprev, onDelta, onReasoning, token);
+:buildRequest: store=cfg.storeResponses, previous_id?,\ninstructions, input via Transcript\n(scrub / split / fit), tools;
+:Http.sse(/responses, body, token);
+partition "Http (java.net.http, HTTP/1.1, 30 min cap)" {
+  :client.send POST\nAccept: text/event-stream;
+  if (status >= 400 ?) then (yes)
+    :BackendException(status, body);
+    stop
+  else (no)
+    :token.attach(lines)\n(register live socket);
+  endif
+}
+note right: SseFramer yields and\nTurnAccumulator consumes\ninterleaved, per event
+repeat :next SseEvent (SseFramer.frame);
+  if (token.isCancelled ?) then (yes)
+    :TurnCancelled();
+    stop
+  endif
+  partition "SseFramer (per spec)" {
+    if (blank line ?) then (yes)
+      if (data real ?\nhaveData and not empty\nand != '[DONE]') then (yes)
+        :emit SseEvent(event, data);
+      else (no)
+        :reset buffer;
+      endif
+    elseif (data: line) then
+      :join with newline,\nstrip one leading space;
+    elseif (event: line) then
+      :set event name;
+    else (comment / id / retry / unknown)
+      :ignore;
+    endif
+  }
+  partition "TurnAccumulator (tolerant name matching)" {
+    :eventCount++;
+    if (JSON parseable ?) then (no)
+      :record '(not-json)';\nreturn null;
+    else (yes)
+      :type = o.type ?: ev.event\n?: o.object ?: '(no-type)';
+      :record(type, sample <= 700)\n(event census);
+      switch (type ?)
+      case (*output_text.delta)
+        :Delta(text) -> out.append -> onDelta;
+      case (*reasoning*_text.delta)
+        :Delta(reasoning) -> onReasoning;
+      case (chat.completion.chunk)
+        :choice.delta / message.content -> text;
+      case (error)
+        :errorFromStream = payload;
+      case (response.*)
+        :absorbResponse: id, usage,\nfinalEvent + incompleteReason,\noutput[] + output_item.done -> calls (dedup),\noutput_text.done fallback when out empty;
+      endswitch
+    endif
+  }
+repeat while (more events ?) is (yes) ->no
+:finally: lines.close()\n(release connection);
+:finish();
+if (errorFromStream ?) then (yes)
+  :BackendException(200,\n'backend reported an error');
+  stop
+elseif (eventCount == 0 ?) then (yes)
+  :BackendException(0, 'no SSE events\nstream=true? missing /v1?');
+  stop
+else (ok)
+endif
+:Turn(text, responseId, usage, finalEvent,\nevents, samples, reasoning,\nincompleteReason, functionCalls);
+:Turn.completed = (finalEvent == 'response.completed');
+stop
+@enduml
