@@ -21,7 +21,7 @@ repeat
     :build tools from rights (Read / Edit / Execute / Git)\nplus protocolFor(the same set);
     :ToolLoop.run(...) - see tool-loop.puml;
   else (Disabled / NoProject / NoFolder / NoWrite)
-    :runPlainTurn: ResponsesClient.turn(...);
+    :runPlainTurn: gatewayFactory(config).turn(...);
     note right: a deliberate stop keeps the partial answer\nso the next send can steer
   endif
   if (succeeded, or not a retryable overflow ?) then (done)
