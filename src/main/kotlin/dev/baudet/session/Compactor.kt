@@ -119,7 +119,7 @@ class Compactor(
                 "No commentary, no preamble."
 
         /** Output bound for one summary call: a summary is meant to be short. */
-        private const val SUMMARY_TOKENS = 512
+        internal const val SUMMARY_TOKENS = 512
 
         /** Ceiling on the text of one summarization call, in characters. */
         private const val MAX_SOURCE_CHARS = 48_000
