@@ -44,6 +44,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val gitAllowWrites = JCheckBox(Texts[Key.GitAllowWrites])
     private val toolMode = JComboBox(arrayOf(Texts[Key.ToolModeOff], Texts[Key.ToolModeAsk], Texts[Key.ToolModeAuto]))
     private val maxIterations = JTextField(6)
+    private val maxParallelTurns = JTextField(6)
+    private val transcriptWrap = JCheckBox(Texts[Key.TranscriptWrap])
     private val systemPrompt = JTextArea(5, 34).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -85,6 +87,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         autoApproveSafe.toolTipText = Texts[Key.TipAutoApproveSafe]
         gitAllowWrites.toolTipText = Texts[Key.TipGitAllowWrites]
         maxIterations.toolTipText = Texts[Key.TipMaxIterations]
+        maxParallelTurns.toolTipText = Texts[Key.TipMaxParallelTurns]
+        transcriptWrap.toolTipText = Texts[Key.TipTranscriptWrap]
         contextStrategy.addActionListener { updateEnabled() }
         toolMode.addActionListener { updateEnabled() }
         val form = formPanel(
@@ -103,11 +107,13 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 Texts[Key.ReasoningEffortLabel] to reasoning,
                 Texts[Key.ToolModeLabel] to toolMode,
                 Texts[Key.MaxToolIterationsLabel] to maxIterations,
+                Texts[Key.MaxParallelTurnsLabel] to maxParallelTurns,
                 "" to useResponses,
                 "" to storeResp,
                 "" to useServerSession,
                 "" to autoApproveSafe,
                 "" to gitAllowWrites,
+                "" to transcriptWrap,
                 // Wrapped, so the prompt scrolls inside its own 5 rows instead of asking the
                 // form for the height of every line it holds.
                 Texts[Key.SystemPromptLabel] to scrollingField(systemPrompt)
@@ -222,6 +228,8 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         language.selectedIndex = Texts.parse(c.language).ordinal
         toolMode.selectedIndex = c.toolMode.ordinal
         maxIterations.text = c.maxToolIterations.toString()
+        maxParallelTurns.text = c.maxParallelTurns.toString()
+        transcriptWrap.isSelected = c.transcriptWrap
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
         reloadCommandLists()
@@ -295,6 +303,9 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             maxIterations.text.trim().toIntOrNull()?.takeIf { it > 0 }
                 ?: run { fail(Texts[Key.ErrMaxIterations]); return null }
         } else state.config.maxToolIterations
+        // One turn is the floor: refusing to run any turn at all is never what a limit means.
+        val mpt = maxParallelTurns.text.trim().toIntOrNull()?.takeIf { it >= 1 }
+            ?: run { fail(Texts[Key.ErrMaxParallelTurns]); return null }
         return state.config.copy(
             language = languageCodes[language.selectedIndex],
             baseUrl = url,
@@ -313,8 +324,10 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             useServerSession = useServerSession.isSelected,
             autoApproveSafeCommands = autoApproveSafe.isSelected,
             gitAllowWrites = gitAllowWrites.isSelected,
+            transcriptWrap = transcriptWrap.isSelected,
             toolMode = tools,
             maxToolIterations = mi,
+            maxParallelTurns = mpt,
             systemPrompt = systemPrompt.text
         )
     }

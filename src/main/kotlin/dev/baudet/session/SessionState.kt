@@ -1,5 +1,7 @@
 package dev.baudet.session
 
+import dev.baudet.thread.Item
+
 /**
  * One conversation. previousResponseId is the wire to the server-side session;
  * null means we send the history ourselves.
@@ -10,6 +12,12 @@ class SessionState(
     var previousResponseId: String?,
     val messages: MutableList<Msg> = mutableListOf()
 ) {
+    /**
+     * The rich transcript rows shown for this conversation, kept so a reload rebuilds the
+     * cards instead of flattening them. A display projection independent of [messages]:
+     * compaction trims the model context in [messages] but never this audit trail.
+     */
+    val items: MutableList<Item> = mutableListOf()
     /** Summary after compaction; replaces the older turns in the prompt. */
     var summary: String? = null
 

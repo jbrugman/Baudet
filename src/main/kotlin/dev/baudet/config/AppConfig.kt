@@ -21,6 +21,13 @@ data class AppConfig(
     var model: String = "",
     /** UI language: "en", "nl", "fr" or "de". Anything else reads back as English. */
     var language: String = "en",
+    /**
+     * How the transcript renders a line wider than the pane. Wrapping (the default) folds the
+     * line to fit, which is what prose wants; turning it off keeps a long line whole and gives the
+     * pane a horizontal scrollbar instead, which is what a diff or a long path wants. Per user,
+     * per machine, and it rides in the single-row JSON blob, so toggling it touches no schema.
+     */
+    var transcriptWrap: Boolean = true,
 
     /**
      * The ceiling on the reply a turn may produce. 0 -- the default -- omits the field so the
@@ -71,6 +78,15 @@ data class AppConfig(
     var toolMode: ToolMode = ToolMode.Ask,
     /** Upper bound on model<->tool round trips in one turn; a guard against a runaway loop. */
     var maxToolIterations: Int = 8,
+    /**
+     * How many turns the user is willing to run at once. One machine's parallel is another's
+     * stall: a big local box can drive several turns side by side, while a small laptop should
+     * keep the single active turn the conversation model assumes today. Floor 1. The value is
+     * honoured as far as [dev.baudet.app.AppState] can run turns safely now, so raising it is a
+     * declaration of intent that becomes real as the app gains independent sessions -- the shape
+     * the app-server protocol needs, where turns run one per thread.
+     */
+    var maxParallelTurns: Int = 1,
 
     /**
      * Exact commands the user chose to always allow from the run dialog. Matching is on the whole

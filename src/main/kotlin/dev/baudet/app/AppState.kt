@@ -23,7 +23,9 @@ import dev.baudet.store.H2Store
 import dev.baudet.store.SessionSummary
 import dev.baudet.thread.ApprovalDecision
 import dev.baudet.thread.ApprovalRequest
+import dev.baudet.thread.ItemCompleted
 import dev.baudet.thread.ItemSink
+import dev.baudet.thread.ReasoningItem
 import dev.baudet.thread.ThreadEmitter
 import dev.baudet.thread.ThreadEvent
 import dev.baudet.tool.CallExtractor
@@ -60,18 +62,37 @@ class AppState(val store: H2Store) {
     var session: SessionState = SessionState(SessionIds.new(), config.model, null)
 
     /**
-     * True while a turn runs against the session it captured. Session switchers refuse to
-     * move the field while this holds, so a reply never lands in a conversation the user
-     * switched to mid-stream. Backed by an AtomicBoolean so [send] and [compact] claim it
-     * atomically and a second concurrent turn is rejected; the setter stays public so a test
-     * can hold the flag, while the UI leaves the actual claim to those two methods.
+     * Turns now claimed. A counter rather than a bare boolean so the ceiling can come from
+     * [AppConfig.maxParallelTurns]: today that ceiling is [MAX_SAFE_PARALLEL] -- one -- because
+     * every turn still shares the single live [session], so a second one would reorder its
+     * messages and corrupt its persistence. The counter is the seam the app-server protocol needs,
+     * where turns run one per thread, so raising safe parallelism later is a change here, not a
+     * re-write of the [send]/[compact] claim sites. As before, a second concurrent turn is refused,
+     * and the setter stays public so a test can hold a slot while the UI leaves the claim to those.
      */
-    private val turnLock = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val activeTurns = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** How many turns may run at once: the configured intent, bounded by what is safe today. */
+    private fun turnCapacity(): Int = config.maxParallelTurns.coerceIn(1, MAX_SAFE_PARALLEL)
+
+    /** Claim a turn slot, or refuse when none is free. */
+    private fun tryClaimTurn(): Boolean {
+        while (true) {
+            val current = activeTurns.get()
+            if (current >= turnCapacity()) return false
+            if (activeTurns.compareAndSet(current, current + 1)) return true
+        }
+    }
+
+    /** Hand a turn slot back; paired with every successful [tryClaimTurn]. */
+    private fun releaseTurn() {
+        activeTurns.decrementAndGet()
+    }
 
     var turning: Boolean
-        get() = turnLock.get()
+        get() = activeTurns.get() > 0
         set(value) {
-            turnLock.set(value)
+            activeTurns.set(if (value) 1 else 0)
         }
 
     /**
@@ -169,6 +190,7 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = msgs.toMutableList()
         )
+        session.items += store.items(id)
         session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
     }
@@ -281,6 +303,7 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
+        session.items += store.items(id)
         session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
         currentProjectId = session.projectId
@@ -629,7 +652,7 @@ class AppState(val store: H2Store) {
         image: String? = null,
         onEvent: (ThreadEvent) -> Unit = {}
     ): Turn {
-        if (!turnLock.compareAndSet(false, true)) {
+        if (!tryClaimTurn()) {
             throw IllegalStateException("a turn is already running")
         }
         // Install the handle before the first request leaves, so a Stop pressed the instant the
@@ -639,7 +662,12 @@ class AppState(val store: H2Store) {
         val s = session
         // One emitter per turn, named for the conversation, opened before the prompt row so the
         // prompt lands inside the turn instead of belonging to whichever turn came after it.
-        val emitter = ThreadEmitter(s.sessionId, onEvent)
+        val emitter = ThreadEmitter(s.sessionId) { ev ->
+            // Capture every finished row so a reload rebuilds the cards; reasoning is shown
+            // in the dock only and is deliberately never stored.
+            if (ev is ItemCompleted && ev.item !is ReasoningItem) s.items.add(ev.item)
+            onEvent(ev)
+        }
         emitter.turnStarted()
         s.messages.add(Msg("user", userText))
         emitter.userMessage(userText)
@@ -695,7 +723,7 @@ class AppState(val store: H2Store) {
             throw e
         } finally {
             activeToken = null
-            turnLock.set(false)
+            releaseTurn()
         }
     }
 
@@ -882,7 +910,7 @@ class AppState(val store: H2Store) {
      * user gets, and a narrower return type here is where that truth would be lost.
      */
     fun compact(keepLast: Int, onDelta: (String) -> Unit): CompactionOutcome {
-        if (!turnLock.compareAndSet(false, true)) {
+        if (!tryClaimTurn()) {
             throw IllegalStateException("a turn is already running")
         }
         try {
@@ -899,7 +927,7 @@ class AppState(val store: H2Store) {
             persist()
             return s
         } finally {
-            turnLock.set(false)
+            releaseTurn()
         }
     }
 
@@ -912,6 +940,7 @@ class AppState(val store: H2Store) {
      */
     private fun persistTo(s: SessionState) {
         store.rewriteMessages(s.sessionId, s.messages)
+        store.rewriteItems(s.sessionId, s.items)
         store.upsertSession(
             s.sessionId, s.model, s.previousResponseId, s.messages.size, s.projectId, s.summary
         )
@@ -940,6 +969,14 @@ class AppState(val store: H2Store) {
         private const val MAX_OVERFLOW_RETRIES = 2
         /** How much of the previous window a retry reaches for, as a percentage -- a shrinking bound. */
         private const val OVERFLOW_SHRINK_STEP = 60
+        /**
+         * The most turns runnable at once right now. One, because every turn shares the single live
+         * [session]; a second turn would write the same message list and server session out of
+         * order. Raising the app's real parallelism means giving each turn its own session first --
+         * the shape the app-server protocol wants -- and only then lifting this bound so a large
+         * machine can act on a higher [AppConfig.maxParallelTurns].
+         */
+        private const val MAX_SAFE_PARALLEL = 1
         /**
          * Room held back between the model's stated window and what we treat as usable. A window is
          * the total the backend counts, and a request that lands exactly on it is still refused, so

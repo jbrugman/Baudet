@@ -29,6 +29,7 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Insets
+import java.awt.Rectangle
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
 import javax.swing.JButton
@@ -37,11 +38,13 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
+import javax.swing.Scrollable
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.text.DefaultStyledDocument
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
+import javax.swing.text.View
 import javax.swing.border.EmptyBorder
 
 /** How one line of a unified diff reads, so a card can colour it without re-deriving the rules. */
@@ -200,14 +203,38 @@ class TranscriptView : JPanel(BorderLayout()) {
         private const val EXPAND_ARROW = "\u25be"
     }
 
-    /** The rows, oldest on top. */
-    private val rows = JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        border = EmptyBorder(8, 10, 8, 10)
+    /**
+     * The rows, oldest on top. It is [Scrollable] so the viewport sizes it to its own width in the
+     * wrap mode: a plain panel would keep its preferred width, so a narrower viewport would clip a
+     * wrapped row instead of re-folding it -- the asymmetry that left a narrower window wrong until
+     * the next rebuild. Tracking makes folding follow the viewport in both directions, live.
+     */
+    private val rows = object : JPanel(), Scrollable {
+        init {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = EmptyBorder(8, 10, 8, 10)
+        }
+
+        override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
+        override fun getScrollableUnitIncrement(r: Rectangle?, orientation: Int, direction: Int): Int = 16
+        override fun getScrollableBlockIncrement(r: Rectangle?, orientation: Int, direction: Int): Int =
+            if (orientation == SwingConstants.VERTICAL) (r?.height ?: 0) else (r?.width ?: 0)
+        // The wrap mode folds to the viewport width, so the view takes that width; the scroll mode
+        // keeps the natural width so a wide row scrolls. Height is never tracked -- it needs a bar.
+        override fun getScrollableTracksViewportWidth(): Boolean = wrap
+        override fun getScrollableTracksViewportHeight(): Boolean = false
     }
 
     /** The viewport, so the host can place this whole view in its own split. */
     val scroll = JScrollPane(rows, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER)
+
+    /**
+     * Whether a row's text folds to the pane width (true, the prose default) or keeps its length
+     * and asks the pane for a horizontal scrollbar (false, for diffs and long paths). The host sets
+     * it from [dev.baudet.config.AppConfig.transcriptWrap] and calls [applyWrap]; the text panes
+     * read it live, so one flip re-lays the whole transcript without rebuilding it.
+     */
+    var wrap: Boolean = true
 
     /** Rows still open, by item id, because a delta arrives naming the row it belongs to. */
     private val open = LinkedHashMap<String, Row>()
@@ -228,6 +255,20 @@ class TranscriptView : JPanel(BorderLayout()) {
 
     init {
         add(scroll, BorderLayout.CENTER)
+    }
+
+    /**
+     * Apply the current [wrap] mode to the viewport: the wrap mode hides the horizontal bar, the
+     * scroll mode shows it on demand. Hiding the bar on its own folds nothing, so the real work
+     * lives in [textPane] -- a wrapped pane asks for the viewport width and its folded height, an
+     * unwrapped one asks for its natural single-line width. The revalidate lets the panes already
+     * on screen re-measure under the new mode, so a flip lands without rebuilding the transcript.
+     */
+    fun applyWrap() {
+        scroll.horizontalScrollBarPolicy =
+            if (wrap) JScrollPane.HORIZONTAL_SCROLLBAR_NEVER else JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+        rows.revalidate()
+        rows.repaint()
     }
 
     // ---- styles --------------------------------------------------------------------------
@@ -294,7 +335,8 @@ class TranscriptView : JPanel(BorderLayout()) {
      * stored, so a reload shows the prompts and the answers; the step cards lived in one turn's
      * event stream and are gone with it. That is stated rather than papered over, because a card
      * that survived a reload by being re-derived from prose would be a card that claims a step
-     * it cannot evidence. Persisting rows is the job this leaves open.
+     * it cannot evidence. Rows are persisted now, so a conversation that keeps them reloads
+     * through [rebuildItems]; this prose path only serves one stored before rows were ever kept.
      */
     fun rebuild(summary: String?, messages: List<Msg>) {
         open.clear()
@@ -308,6 +350,30 @@ class TranscriptView : JPanel(BorderLayout()) {
             } else {
                 rows.add(promptRow(m.content, false))
             }
+        }
+        rows.revalidate()
+        rows.repaint()
+        SwingUtilities.invokeLater { scrollToTail() }
+    }
+
+    /**
+     * Rebuild the transcript from the stored rows, replaying each through [started] then
+     * [completed] so every card -- command, file change, tool call, error -- returns as it was
+     * shown. This is the reload path now that rows persist; [rebuild] is the fallback for a
+     * conversation stored before rows were kept, which can only show prose.
+     */
+    fun rebuildItems(summary: String?, items: List<Item>) {
+        open.clear()
+        rows.removeAll()
+        promptImage = false
+        summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
+        items.forEach { item ->
+            started(item)
+            // A command card that recorded its decision replays it, so the verdict line returns.
+            if (item is CommandExecutionItem) item.approval?.let {
+                (open[item.itemId] as? ApprovalCapable)?.resolveApproval(it)
+            }
+            completed(item)
         }
         rows.revalidate()
         rows.repaint()
@@ -420,12 +486,40 @@ class TranscriptView : JPanel(BorderLayout()) {
         if (follow) SwingUtilities.invokeLater { scrollToTail() }
     }
 
-    /** A text surface for one row: wrapping, selectable, and never its own visible box. */
-    private fun textPane(): JTextPane = JTextPane().apply {
-        isEditable = false
-        isOpaque = false
-        font = Font(Font.MONOSPACED, Font.PLAIN, 13)
-        margin = Insets(0, 0, 0, 0)
+    /**
+     * A text surface for one row: selectable and never its own visible box. Whether a long line
+     * folds is decided by the pane itself, not by the viewport, because these panes are nested --
+     * text pane, row, rows panel, viewport -- so a pane is never the viewport's direct view and the
+     * viewport cannot clip it into wrapping. In the wrap mode the pane therefore asks for the
+     * viewport width as its own width and for the height the folded text needs there, which pulls
+     * the row and the wrapped line onto the pane width; in the scroll mode it asks for its natural
+     * single-line width, so a wide row keeps its shape and [scroll]'s horizontal bar scrolls it.
+     */
+    private fun textPane(): JTextPane = object : JTextPane() {
+        init {
+            isEditable = false
+            isOpaque = false
+            font = Font(Font.MONOSPACED, Font.PLAIN, 13)
+            margin = Insets(0, 0, 0, 0)
+        }
+
+        /**
+         * In the wrap mode a long line folds to the viewport width, so the pane must claim that
+         * width and the taller height the folded text needs. [super.getPreferredSize] reports the
+         * width a single line wants and a one-line height, which is what left the fold clipped
+         * before. With the bar shown (the scroll mode), or before the viewport has a width yet, the
+         * natural size is kept so a wide row keeps its shape and scrolls.
+         */
+        override fun getPreferredSize(): Dimension {
+            val natural = super.getPreferredSize()
+            val available = if (wrap) scroll.viewport.width else 0
+            if (available <= 0 || natural.width <= available) return natural
+            val root = getUI().getRootView(this)
+            root.setSize(available.toFloat(), Short.MAX_VALUE.toFloat())
+            val folded = kotlin.math.ceil(root.getPreferredSpan(View.Y_AXIS).toDouble()).toInt()
+            val edge = insets
+            return Dimension(available, folded + edge.top + edge.bottom)
+        }
     }
 
     private fun noteRow(text: String): Row = Row().apply {

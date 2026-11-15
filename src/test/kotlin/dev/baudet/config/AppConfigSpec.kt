@@ -175,4 +175,33 @@ class AppConfigSpec : BehaviorSpec({
             }
         }
     }
+
+    given("the display and concurrency settings added this build") {
+        `when`("a fresh config is made") {
+            val cfg = AppConfig()
+            then("the transcript wraps long lines by default") {
+                cfg.transcriptWrap shouldBe true
+            }
+            then("a single turn runs at a time by default") {
+                cfg.maxParallelTurns shouldBe 1
+            }
+        }
+        `when`("an old blob that predates them is read back") {
+            val cfg = json.decodeFromString(AppConfig.serializer(), """{"model":"m1"}""")
+            then("they fall back to their defaults rather than failing the load") {
+                cfg.transcriptWrap shouldBe true
+                cfg.maxParallelTurns shouldBe 1
+            }
+        }
+        `when`("they round-trip through the stored form") {
+            val cfg = AppConfig(transcriptWrap = false, maxParallelTurns = 4)
+            val back = json.decodeFromString(
+                AppConfig.serializer(), json.encodeToString(AppConfig.serializer(), cfg)
+            )
+            then("both survive verbatim") {
+                back.transcriptWrap shouldBe false
+                back.maxParallelTurns shouldBe 4
+            }
+        }
+    }
 })
