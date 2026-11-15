@@ -17,7 +17,7 @@
     <maven.compiler.release>25</maven.compiler.release>
     <kotlin.version>2.4.21</kotlin.version>
     <kotlin.jvmTarget>25</kotlin.jvmTarget>
-    <serialization.version>1.12.0</serialization.version>
+    <serialization.version>1.13.0</serialization.version>
     <flatlaf.version>3.8</flatlaf.version>
     <h2.version>2.5.252</h2.version>
     <slf4j.version>2.0.20</slf4j.version>
