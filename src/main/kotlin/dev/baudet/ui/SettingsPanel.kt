@@ -41,6 +41,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val storeResp = JCheckBox(Texts[Key.StoreResponses])
     private val useServerSession = JCheckBox(Texts[Key.SendPreviousResponseId])
     private val autoApproveSafe = JCheckBox(Texts[Key.AutoApproveSafe])
+    private val gitAllowWrites = JCheckBox(Texts[Key.GitAllowWrites])
     private val toolMode = JComboBox(arrayOf(Texts[Key.ToolModeOff], Texts[Key.ToolModeAsk], Texts[Key.ToolModeAuto]))
     private val maxIterations = JTextField(6)
     private val systemPrompt = JTextArea(5, 34).apply {
@@ -82,6 +83,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         storeResp.toolTipText = Texts[Key.TipStoreResponses]
         useServerSession.toolTipText = Texts[Key.TipSendResponseId]
         autoApproveSafe.toolTipText = Texts[Key.TipAutoApproveSafe]
+        gitAllowWrites.toolTipText = Texts[Key.TipGitAllowWrites]
         maxIterations.toolTipText = Texts[Key.TipMaxIterations]
         contextStrategy.addActionListener { updateEnabled() }
         toolMode.addActionListener { updateEnabled() }
@@ -105,6 +107,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 "" to storeResp,
                 "" to useServerSession,
                 "" to autoApproveSafe,
+                "" to gitAllowWrites,
                 // Wrapped, so the prompt scrolls inside its own 5 rows instead of asking the
                 // form for the height of every line it holds.
                 Texts[Key.SystemPromptLabel] to scrollingField(systemPrompt)
@@ -191,6 +194,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         val toolsOn = toolMode.selectedIndex != ToolMode.Off.ordinal
         maxIterations.isEnabled = toolsOn
         autoApproveSafe.isEnabled = toolsOn
+        gitAllowWrites.isEnabled = toolsOn
     }
 
     fun reload() {
@@ -210,6 +214,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         storeResp.isSelected = c.storeResponses
         useServerSession.isSelected = c.useServerSession
         autoApproveSafe.isSelected = c.autoApproveSafeCommands
+        gitAllowWrites.isSelected = c.gitAllowWrites
         // Raw stored text: blank means "use the built-in default", which the
         // field label says. Showing the resolved text here would store it back
         // as user text and freeze it against later language changes.
@@ -307,6 +312,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             storeResponses = storeResp.isSelected,
             useServerSession = useServerSession.isSelected,
             autoApproveSafeCommands = autoApproveSafe.isSelected,
+            gitAllowWrites = gitAllowWrites.isSelected,
             toolMode = tools,
             maxToolIterations = mi,
             systemPrompt = systemPrompt.text

@@ -1,5 +1,6 @@
 package dev.baudet.tool
 
+import dev.baudet.thread.ItemKind
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -12,5 +13,18 @@ interface Tool {
     val name: String
     val description: String
     val parameters: JsonObject
+
+    /**
+     * The card this tool's run is shown in.
+     *
+     * Declared here so the loop never decides that by matching on a tool's *name*: a rename
+     * or a new tool would silently move a run into the wrong row, and nothing would fail.
+     * The default is [ItemKind.ToolCall], the honest fallback for a tool the interface has no
+     * dedicated card for -- and the one tag in the vocabulary that is named as Baudet's own
+     * rather than borrowed from the app-server, because pretending otherwise would make the
+     * transcript claim a wire item the backend never defined.
+     */
+    val itemKind: ItemKind get() = ItemKind.ToolCall
+
     fun execute(args: JsonObject, ctx: ToolContext): ToolResult
 }

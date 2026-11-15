@@ -9,6 +9,7 @@ import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
 import dev.baudet.ui.AppIcon
 import dev.baudet.ui.AboutDialog
+import dev.baudet.ui.BaudetPalette
 import dev.baudet.ui.HelpDialog
 import dev.baudet.ui.ChatPanel
 import dev.baudet.ui.FileTreePanel
@@ -19,10 +20,7 @@ import dev.baudet.ui.SidebarToggleIcon
 import dev.baudet.ui.WindowLayout
 import java.awt.BorderLayout
 import java.awt.Dimension
-import java.awt.Font
-import java.awt.GraphicsEnvironment
 import java.awt.Insets
-import java.awt.Rectangle
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.nio.file.Path
@@ -32,12 +30,9 @@ import javax.swing.JFrame
 import javax.swing.JMenu
 import javax.swing.JMenuBar
 import javax.swing.JMenuItem
-import javax.swing.JOptionPane
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
-import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
 import kotlin.system.exitProcess
@@ -65,6 +60,7 @@ fun main(args: Array<String>) {
     UIManager.put("Button.arc", 8)
     UIManager.put("Component.arc", 8)
     UIManager.put("TextComponent.arc", 8)
+    BaudetPalette.install()
 
     SwingUtilities.invokeLater {
         val frame = JFrame("Baudet · local coding-assistant")
@@ -84,17 +80,6 @@ fun main(args: Array<String>) {
                 shown = Texts.language
                 val previous = layout
                 SwingUtilities.invokeLater { layout = show(state, frame, previous) }
-            }
-        }
-
-        // Ask mode reaches back through AppState for a real decision; Auto bypasses it
-        // and tools-off never asks. The dialog is modal to this frame and blocks the worker.
-        state.approveEdit = { rel, diff -> confirmEdit(frame, rel, diff) }
-        state.approveCommand = { command, cwd, timeout ->
-            when (confirmRun(frame, command, cwd, timeout)) {
-                RunDecision.Once -> true
-                RunDecision.Always -> { state.allowCommandAlways(command); true }
-                RunDecision.Deny -> false
             }
         }
 
@@ -218,7 +203,7 @@ private fun applySavedSize(frame: JFrame, config: AppConfig) {
  * Place the frame where the user left it, once it is displayable. Run after the window is
  * shown, because a location set before the native peer exists is ignored on macOS and the
  * window would otherwise reopen at the same default spot every launch. A remembered spot
- * that no longer intersects any screen, or none stored at all, falls back to center.
+ * that no longer lands inside a screen, or none stored at all, falls back to center.
  */
 private fun applySavedLocation(frame: JFrame, config: AppConfig) {
     val width = config.windowWidth
@@ -227,9 +212,10 @@ private fun applySavedLocation(frame: JFrame, config: AppConfig) {
         frame.setLocationRelativeTo(null)
         return
     }
-    val saved = Rectangle(config.windowX, config.windowY, width, height)
-    val visible = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
-    if (visible.intersects(saved)) frame.setLocation(config.windowX, config.windowY)
+    // Per-screen containment rather than the union of all screens: a union has no gaps, so a spot
+    // a removed monitor left behind used to pass as visible and put the title bar out of reach.
+    if (WindowLayout.rememberedOriginIsReachable(config.windowX, config.windowY, WindowLayout.screens()))
+        frame.setLocation(config.windowX, config.windowY)
     else frame.setLocationRelativeTo(null)
 }
 
@@ -243,88 +229,6 @@ private fun clampedDivider(split: JSplitPane, stored: Int): Int {
     val extent = if (split.orientation == JSplitPane.VERTICAL_SPLIT) split.height else split.width
     val location = split.dividerLocation
     return if (location <= 0 || location >= extent) stored else location
-}
-
-/**
- * Ask the human to approve a proposed file change: the path as the question, the unified
- * diff below it. Runs on the event thread and blocks the calling worker until answered, so
- * the tool loop pauses on a real decision. Any failure to present the dialog denies the
- * write -- a preview that cannot be shown is not consent. (B3 replaces this modal with an
- * inline approval card in the transcript.)
- */
-private fun confirmEdit(owner: JFrame, rel: String, diff: String): Boolean {
-    var approved = false
-    try {
-        SwingUtilities.invokeAndWait {
-            val prompt = JTextArea(Texts.fmt(Key.EditReviewPrompt, rel)).apply {
-                isEditable = false
-                isOpaque = false
-            }
-            val preview = JTextArea(diff).apply {
-                isEditable = false
-                font = Font(Font.MONOSPACED, Font.PLAIN, 12)
-            }
-            val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 320) }
-            approved = JOptionPane.showConfirmDialog(
-                owner,
-                arrayOf<Any>(prompt, scroll),
-                Texts[Key.EditReviewTitle],
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-            ) == JOptionPane.YES_OPTION
-        }
-    } catch (_: Exception) {
-        approved = false
-    }
-    return approved
-}
-
-/**
- * Mirrors [confirmEdit] for a run request: modal to the frame, blocking the worker, and
- * denying on any failure. The command is shown verbatim in a monospaced area so the user
- * sees exactly what will execute, with the working directory and timeout carried in the
- * prompt. Approval is required even in Auto mode because running a command is the one
- * action the folder boundary cannot fence for us.
- */
-private enum class RunDecision { Deny, Once, Always }
-
-private fun confirmRun(owner: JFrame, command: String, workingDir: String, timeoutSeconds: Int): RunDecision {
-    var decision = RunDecision.Deny
-    try {
-        SwingUtilities.invokeAndWait {
-            val prompt = JTextArea(Texts.fmt(Key.RunReviewPrompt, workingDir, timeoutSeconds)).apply {
-                isEditable = false
-                isOpaque = false
-            }
-            val preview = JTextArea(command).apply {
-                isEditable = false
-                font = Font(Font.MONOSPACED, Font.PLAIN, 12)
-            }
-            val scroll = JScrollPane(preview).apply { preferredSize = Dimension(560, 200) }
-            // Three choices, not a bare yes/no: running once is the safe default, and "always" lets
-            // the user stop being asked about the very command now on screen. The command is pinned
-            // whole, so an allow here is an allow for exactly this string, never a chained variant.
-            val options = arrayOf(Texts[Key.AllowOnce], Texts[Key.AlwaysAllow], Texts[Key.DenyButton])
-            val choice = JOptionPane.showOptionDialog(
-                owner,
-                arrayOf<Any>(prompt, scroll),
-                Texts[Key.RunReviewTitle],
-                JOptionPane.DEFAULT_OPTION,
-                JOptionPane.QUESTION_MESSAGE,
-                null,
-                options,
-                options[0]
-            )
-            decision = when (choice) {
-                0 -> RunDecision.Once
-                1 -> RunDecision.Always
-                else -> RunDecision.Deny
-            }
-        }
-    } catch (_: Exception) {
-        decision = RunDecision.Deny
-    }
-    return decision
 }
 
 /**

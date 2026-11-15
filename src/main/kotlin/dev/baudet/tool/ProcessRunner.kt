@@ -42,12 +42,18 @@ object ProcessRunner {
     private const val TAIL_BYTES = 8 * 1024
     private const val CAP_BYTES = HEAD_BYTES + TAIL_BYTES
 
-    /** The outcome of a run: the exit code (null on timeout), the timeout flag and both streams. */
+    /**
+     * The outcome of a run: the exit code (null on timeout), the timeout flag, both streams,
+     * and the wall-clock time it took. [durationMs] is measured here because this is the only
+     * place that knows when the process actually started -- a caller timing the call itself
+     * would also charge it for staging the script.
+     */
     class Result(
         val exitCode: Int?,
         val timedOut: Boolean,
         val stdout: Captured,
-        val stderr: Captured
+        val stderr: Captured,
+        val durationMs: Long = 0L
     ) {
         /** The two stream sections, with a no-output marker when both are empty. */
         fun body(): String = buildString {
@@ -68,6 +74,7 @@ object ProcessRunner {
         timeoutSeconds: Long,
         configure: (ProcessBuilder) -> Unit = {}
     ): Result {
+        val startedAt = System.nanoTime()
         val process = ProcessBuilder(argv)
             .directory(dir)
             .redirectErrorStream(false)
@@ -87,7 +94,7 @@ object ProcessRunner {
         outThread.join(JOIN_MILLIS)
         errThread.join(JOIN_MILLIS)
         val exit = if (timedOut) null else process.exitValue()
-        return Result(exit, timedOut, out, err)
+        return Result(exit, timedOut, out, err, (System.nanoTime() - startedAt) / 1_000_000L)
     }
 
     /**

@@ -52,7 +52,18 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     NewSessionStatus("new session {0}", "nieuwe sessie {0}", "nouvelle session {0}", "neue Sitzung {0}"),
     TooFewTurns("too few turns to compact", "te weinig beurten om te compacten", "trop peu de tours à compresser", "zu wenige Runden zum Kompaktieren"),
     Summarising("summarising...", "samenvatten...", "résumé en cours...", "Zusammenfassung..."),
-    CompactionEmpty("compaction returned nothing", "compaction gaf niets terug", "la compression n'a rien renvoyé", "Kompaktierung lieferte nichts zurück"),
+    CompactionOversizedTurn(
+        "oldest turn does not fit one {0}-character summary call: nothing was compacted",
+        "oudste turn past niet in één samenvattingscall van {0} tekens: er is niets gecompackt",
+        "le plus ancien tour dépasse un appel de résumé de {0} caractères : rien n'a été compressé",
+        "ältester Turn passt nicht in einen {0}-Zeichen-Zusammenfassungsaufruf: nichts wurde kompaktiert"
+    ),
+    CompactionRefused(
+        "model returned no usable summary ({0}): nothing was compacted",
+        "model gaf geen bruikbare samenvatting ({0}): er is niets gecompackt",
+        "le modèle n'a renvoyé aucun résumé exploitable ({0}) : rien n'a été compressé",
+        "Modell lieferte keine verwendbare Zusammenfassung ({0}): nichts wurde kompaktiert"
+    ),
     CompactionDone("compacted into a summary of {0} characters", "compact naar {0} tekens samenvatting", "compressé en un résumé de {0} caractères", "kompaktiert zu einer Zusammenfassung von {0} Zeichen"),
     CompactionFailed("compaction failed: {0}", "compaction mislukt: {0}", "échec de la compression : {0}", "Kompaktierung fehlgeschlagen: {0}"),
     YouLabel("you: ", "jij: ", "vous : ", "Sie: "),
@@ -183,11 +194,29 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     AllowOnce("Allow once", "Eenmaal toestaan", "Autoriser une fois", "Einmal zulassen"),
     AlwaysAllow("Always allow", "Altijd toestaan", "Toujours autoriser", "Immer zulassen"),
     DenyButton("Deny", "Weigeren", "Refuser", "Ablehnen"),
+    ApplyPatch("Apply", "Toepassen", "Appliquer", "Anwenden"),
+    ApprovalWaiting("waiting for your decision", "wacht op jouw beslissing", "en attente de votre décision", "wartet auf Ihre Entscheidung"),
+    ApprovalAllowedOnce("allowed once", "eenmaal toegestaan", "autorisé une fois", "einmal zugelassen"),
+    ApprovalAllowedAlways("always allowed", "altijd toegestaan", "toujours autorisé", "immer zugelassen"),
+    ApprovalDenied("denied", "geweiger", "refusé", "abgelehnt"),
+    ApprovalCancelled("cancelled", "geannuleerd", "annulé", "abgebrochen"),
     AutoApproveSafe(
         "Auto-approve safe read-only commands",
         "Veilige alleen-lezen commando's automatisch goedkeuren",
         "Approuver automatiquement les commandes en lecture seule sûres",
         "Sichere schreibgeschützte Befehle automatisch genehmigen"
+    ),
+    GitAllowWrites(
+        "Let git write (add, commit, checkout, stash, push)",
+        "Git laten schrijven (add, commit, checkout, stash, push)",
+        "Autoriser git à écrire (add, commit, checkout, stash, push)",
+        "Git schreiben lassen (add, commit, checkout, stash, push)"
+    ),
+    TipGitAllowWrites(
+        "Adds the write verbs to the git tool. Each still needs the project's Write right and your approval on its card before it runs; force pushes, history rewrites and destructive stashes stay blocked.",
+        "Voegt de schrijfcommando's toe aan de git-tool. Elk vraagt nog steeds om het Write-recht van het project én jouw goedkeuring op de kaart voordat het draait; force pushes, herschrijvingen van de historie en destructieve stashes blijven geblokkeerd.",
+        "Ajoute les commandes d'écriture à l'outil git. Chacune exige toujours le droit d'écriture du projet et votre approbation sur sa carte avant de s'exécuter ; les push forcés, les réécritures d'historique et les stash destructifs restent bloqués.",
+        "Fügt dem git-Werkzeug die Schreibbefehle hinzu. Jeder benötigt weiterhin das Schreibrecht des Projekts und Ihre Genehmigung auf seiner Karte vor der Ausführung; Pushes mit Kraft, Umschreiben der Historie und destruktive Stashes bleiben gesperrt."
     ),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
@@ -445,5 +474,58 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Afbeelding klaar; hij gaat mee met je volgende bericht",
         "Image prête ; elle accompagne votre prochain message",
         "Bild bereit; es wird mit Ihrer nächsten Nachricht gesendet"
+    ),
+
+    // ---- transcript cards --------------------------------------------------
+    // A step card names how its run ended. "no exit code" is a deliberate string: a timeout and
+    // a command that never started are not exit 0, and a card may not round them to the nearest
+    // number the reader would prefer.
+    RowRunning(
+        "running\u2026",
+        "werkt\u2026",
+        "en cours\u2026",
+        "l\u00e4uft\u2026"
+    ),
+    RowExitCode(
+        "exit {0}",
+        "exitcode {0}",
+        "code de sortie {0}",
+        "Exit-Code {0}"
+    ),
+    RowNoExitCode(
+        "no exit code",
+        "geen exitcode",
+        "aucun code de sortie",
+        "kein Exit-Code"
+    ),
+    RowTimedOut(
+        "timed out after {0} s",
+        "time-out na {0} s",
+        "expir\u00e9e apr\u00e8s {0} s",
+        "Timeout nach {0} s"
+    ),
+    RowRejected(
+        "rejected",
+        "geweigerd",
+        "rejet\u00e9",
+        "abgelehnt"
+    ),
+    RowLinesHidden(
+        "\u2026 {0} lines above hidden",
+        "\u2026 {0} regels hierboven verborgen",
+        "\u2026 {0} lignes ci-dessus masqu\u00e9es",
+        "\u2026 {0} Zeilen oben ausgeblendet"
+    ),
+    RowShowOutput(
+        "show output",
+        "uitvoer tonen",
+        "afficher la sortie",
+        "Ausgabe anzeigen"
+    ),
+    RowHideOutput(
+        "hide output",
+        "uitvoer verbergen",
+        "masquer la sortie",
+        "Ausgabe ausblenden"
     ),
 }

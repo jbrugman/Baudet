@@ -13,6 +13,7 @@ import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
 import dev.baudet.project.FolderPermission
 import dev.baudet.project.Project
+import dev.baudet.session.CompactionOutcome
 import dev.baudet.session.Compactor
 import dev.baudet.session.ContextTrimmer
 import dev.baudet.session.Msg
@@ -20,6 +21,11 @@ import dev.baudet.session.SessionIds
 import dev.baudet.session.SessionState
 import dev.baudet.store.H2Store
 import dev.baudet.store.SessionSummary
+import dev.baudet.thread.ApprovalDecision
+import dev.baudet.thread.ApprovalRequest
+import dev.baudet.thread.ItemSink
+import dev.baudet.thread.ThreadEmitter
+import dev.baudet.thread.ThreadEvent
 import dev.baudet.tool.CallExtractor
 import dev.baudet.tool.CommandSignature
 import dev.baudet.tool.EditFileTool
@@ -84,6 +90,66 @@ class AppState(val store: H2Store) {
         activeToken?.cancel()
     }
 
+    /**
+     * A human decision the turn in flight is waiting on. The worker parks on [latch] while the
+     * card raises its buttons; the UI answers through [resolveApproval], and a Stop releases the
+     * latch through the turn's cancellation token. [decision] starts unset so a human answer and a
+     * stop race on one slot: whichever first claims the null wins, and a stop wins a tie -- a turn
+     * the user chose to abandon should not run a step on the strength of a click that landed late.
+     */
+    private class PendingApproval(val latch: java.util.concurrent.CountDownLatch) {
+        val decision = java.util.concurrent.atomic.AtomicReference<ApprovalDecision?>(null)
+    }
+
+    /** Pending approvals by the item id they ride on, so the answering click finds its latch. */
+    private val pendingApprovals = java.util.concurrent.ConcurrentHashMap<String, PendingApproval>()
+
+    /**
+     * Publish an approval request against the step now waiting and block the worker until the
+     * human answers or the turn is stopped. The request is announced by the emitter against the
+     * command or file-change card already on screen, so one card carries the step, its preview and
+     * the buttons -- this is what lets an inline card replace the old modal dialog. A Stop is wired
+     * to the latch through [CancellationToken.onCancel], the only way to unwind a wait no
+     * socket-close reaches; it reports [ApprovalDecision.Cancel] so a stopped turn skips the step
+     * exactly like a refusal.
+     */
+    fun requestApproval(
+        emitter: ThreadEmitter,
+        token: CancellationToken,
+        request: ApprovalRequest
+    ): ApprovalDecision {
+        val itemId = emitter.requestApproval(request)
+        val pending = PendingApproval(java.util.concurrent.CountDownLatch(1))
+        pendingApprovals[itemId] = pending
+        // Releases the wait if the turn was already stopped, and again on a Stop pressed now; the
+        // human answer races it through the same compare-and-set, so only one of them is the answer.
+        token.onCancel {
+            pending.decision.compareAndSet(null, ApprovalDecision.Cancel)
+            pending.latch.countDown()
+        }
+        try {
+            pending.latch.await()
+        } catch (_: InterruptedException) {
+            pending.decision.compareAndSet(null, ApprovalDecision.Cancel)
+            Thread.currentThread().interrupt()
+        } finally {
+            pendingApprovals.remove(itemId)
+            emitter.resolveApproval(itemId, pending.decision.get() ?: ApprovalDecision.Cancel)
+        }
+        return pending.decision.get() ?: ApprovalDecision.Cancel
+    }
+
+    /**
+     * Answer a pending approval from the UI thread: claim the decision slot and release the worker
+     * parked on it. An unknown or already-cleared id -- a double click, or a card whose turn already
+     * stopped -- is ignored, and a lost race against a Stop is dropped, so exactly one decision
+     * counts per request and a stale card can never answer a turn that has moved on.
+     */
+    fun resolveApproval(itemId: String, decision: ApprovalDecision) {
+        val pending = pendingApprovals[itemId] ?: return
+        if (pending.decision.compareAndSet(null, decision)) pending.latch.countDown()
+    }
+
     /** The project a new chat is created under; set when one is selected in the sidebar. */
     var currentProjectId: String? = null
 
@@ -112,22 +178,6 @@ class AppState(val store: H2Store) {
      * cannot absorb in place: the language, which needs the panels rebuilt.
      */
     var onConfigSaved: (AppConfig) -> Unit = {}
-
-    /**
-     * How a proposed file change gets approval in Ask mode. The UI installs a
-     * dialog here; default deny, so an unattended loop never writes on its own.
-     * Auto mode bypasses it, and the tool never calls it when tools are off.
-     */
-    var approveEdit: (relativePath: String, diff: String) -> Boolean = { _, _ -> false }
-
-    /**
-     * The run equivalent of [approveEdit]. A command is shown for confirmation and, unlike
-     * an edit, it stays required even in Auto mode: a subprocess cannot be fenced by the
-     * folder boundary, so the human is the only real guard. Default deny, so an unattended
-     * loop never runs a command on its own.
-     */
-    var approveCommand: (command: String, workingDir: String, timeoutSeconds: Int) -> Boolean =
-        { _, _, _ -> false }
 
     fun saveConfig(next: AppConfig) {
         config = next
@@ -564,12 +614,20 @@ class AppState(val store: H2Store) {
      * Reasoning is display-only and deliberately never stored in a Msg: the backend
      * keeps it behind the response id we send back, so storing it client-side too only
      * inflates every later turn.
+     *
+     * [onEvent] is the same turn as rows rather than as a text stream: the prompt, each reply,
+     * each command with its exit code and duration, each write with its diff, and the accounting
+     * that lets a reader judge the answer. It is last and defaulted because a caller that renders
+     * a flat transcript needs none of it, while one that renders cards gets every row scoped by
+     * the conversation and the turn it belongs to -- which is what makes more than one conversation
+     * running at once addressable instead of merely interleaved.
      */
     fun send(
         userText: String,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {},
-        image: String? = null
+        image: String? = null,
+        onEvent: (ThreadEvent) -> Unit = {}
     ): Turn {
         if (!turnLock.compareAndSet(false, true)) {
             throw IllegalStateException("a turn is already running")
@@ -579,15 +637,23 @@ class AppState(val store: H2Store) {
         val token = CancellationToken()
         activeToken = token
         val s = session
+        // One emitter per turn, named for the conversation, opened before the prompt row so the
+        // prompt lands inside the turn instead of belonging to whichever turn came after it.
+        val emitter = ThreadEmitter(s.sessionId, onEvent)
+        emitter.turnStarted()
         s.messages.add(Msg("user", userText))
+        emitter.userMessage(userText)
         val afterPrompt = s.messages.size
         var shrinkPct = 100
         var attempt = 0
         try {
             while (true) {
                 try {
-                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, token, onDelta, onReasoning, image)
-                    else runPlainTurn(s, shrinkPct, token, onDelta, onReasoning, image)
+                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, token, onDelta, onReasoning, image, emitter)
+                    else runPlainTurn(s, shrinkPct, token, onDelta, onReasoning, image, emitter)
+                    // The accounting goes out with the turn, not afterwards: a reply that stopped
+                    // at the token limit is only recognisable as one while its counts are on screen.
+                    emitter.turnCompleted(turn)
                     persistTo(s)
                     return turn
                 } catch (e: BackendException) {
@@ -609,6 +675,11 @@ class AppState(val store: H2Store) {
                 }
             }
         } catch (e: Exception) {
+            // Close the rows the turn left open, and say why it stopped. A Stop and a failure are
+            // deliberately different here: a stopped turn keeps what it streamed so the next
+            // instruction can steer it, while a failure is an error the reader has to be shown.
+            if (token.isCancelled) emitter.turnInterrupted()
+            else emitter.turnFailed(e.message ?: e.javaClass.simpleName)
             // The plain path lands nothing on a failure, so the only new message is the
             // prompt: drop it and keep the conversation clean. The tool path may already
             // have appended real actions through the sink; those stay, because losing a
@@ -635,7 +706,8 @@ class AppState(val store: H2Store) {
         token: CancellationToken,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
-        image: String?
+        image: String?,
+        sink: ItemSink
     ): Turn {
         val prev = chainedPrev(s)
         // The prompt is the last stored message, so it is taken as the current input and only what
@@ -646,7 +718,9 @@ class AppState(val store: H2Store) {
             if (config.contextStrategy == ContextStrategy.StopAtLimit) Transcript.forCall(outbound(s, shrinkPct))
             else Transcript.splitForWindow(outbound(s, shrinkPct))
         val streamed = StringBuilder()
-        val onText: (String) -> Unit = { chunk -> streamed.append(chunk); onDelta(chunk) }
+        sink.replyStarted()
+        val onText: (String) -> Unit = { chunk -> streamed.append(chunk); sink.textDelta(chunk); onDelta(chunk) }
+        val onAside: (String) -> Unit = { chunk -> sink.reasoningDelta(chunk); onReasoning(chunk) }
         val turn = try {
             gatewayFactory(config).turn(
                 system = instructionsFor(s),
@@ -654,7 +728,7 @@ class AppState(val store: H2Store) {
                 userText = prompt,
                 previousResponseId = prev,
                 onDelta = onText,
-                onReasoning = onReasoning,
+                onReasoning = onAside,
                 token = token,
                 image = image
             )
@@ -666,6 +740,7 @@ class AppState(val store: H2Store) {
             if (token.isCancelled) persistStoppedPartial(s, streamed.toString())
             throw e
         }
+        sink.replyCompleted(turn.text)
         s.messages.add(Msg("assistant", turn.text, turn.responseId, turn.usage?.prompt))
         if (turn.responseId != null) s.previousResponseId = turn.responseId
         return turn
@@ -691,7 +766,8 @@ class AppState(val store: H2Store) {
         token: CancellationToken,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
-        image: String?
+        image: String?,
+        emitter: ThreadEmitter
     ): Turn {
         val project = currentProject(s)
             ?: error("runToolTurn invoked without a gated project") // toolsActive() has gated this
@@ -701,9 +777,30 @@ class AppState(val store: H2Store) {
         val context = ToolContext(
             root = Paths.get(project.folderPath!!),
             writeGranted = writable,
-            approve = if (config.toolMode == ToolMode.Auto) { _, _ -> true } else approveEdit,
+            // In Ask mode an edit is decided by the human on its own card, through the same
+            // blocking path as a command; Auto still writes without asking, and tools-off never
+            // reaches a tool at all. An edit only ever offers Accept or Decline -- there is no
+            // per-file "always" to pin -- so the boolean is simply whether the answer was Accept.
+            approve = if (config.toolMode == ToolMode.Auto) {
+                { _, _ -> true }
+            } else {
+                { rel, diff ->
+                    requestApproval(emitter, token, ApprovalRequest.ApplyPatch(rel, diff)) ==
+                        ApprovalDecision.Accept
+                }
+            },
             execGranted = executable,
-            approveCommand = approveCommand,
+            // A command always asks -- Auto included -- because a subprocess cannot be fenced by
+            // the folder boundary. The three answers mirror the old dialog exactly: run once, pin
+            // to always-allow and run, or refuse. Once this returns true the command runs and its
+            // already-open card fills with output.
+            approveCommand = { command, cwd, timeout ->
+                when (requestApproval(emitter, token, ApprovalRequest.RunCommand(command, cwd, timeout))) {
+                    ApprovalDecision.Accept -> true
+                    ApprovalDecision.AcceptForSession -> { allowCommandAlways(command); true }
+                    else -> false
+                }
+            },
             readGranted = readGranted,
             autoAllow = { allowedCommands() },
             autoApproveSafe = config.autoApproveSafeCommands,
@@ -717,7 +814,9 @@ class AppState(val store: H2Store) {
             add(ReadFileTool())
             if (writable) add(EditFileTool())
             if (executable) add(ExecuteTool())
-            if (readGranted) add(GitTool())
+            // git is offered whenever Read is granted; its write verbs appear only when the user switched
+            // git writes on AND this folder grants Write, so a switch never reaches past the folder's rights.
+            if (readGranted) add(GitTool(writesAllowed = config.gitAllowWrites && writable))
         }
         val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
         val loop = ToolLoop(
@@ -747,6 +846,7 @@ class AppState(val store: H2Store) {
                 onDelta = onText,
                 onReasoning = onReasoning,
                 image = image,
+                sink = emitter,
                 // Committed text already sits in the session, and a tool observation carries none,
                 // so clearing the buffer here leaves exactly the in-flight partial for a stop.
                 onMessage = { streamed.setLength(0); s.messages.add(it) }
@@ -775,7 +875,13 @@ class AppState(val store: H2Store) {
         }
     }
 
-    fun compact(keepLast: Int, onDelta: (String) -> Unit): String? {
+    /**
+     * Folds the older turns and says what came of it. The outcome travels up unchanged on purpose:
+     * whether nothing was folded because the oldest turn cannot fit one call or because the model
+     * sent an answer too unreliable to delete text behind is the whole content of the message the
+     * user gets, and a narrower return type here is where that truth would be lost.
+     */
+    fun compact(keepLast: Int, onDelta: (String) -> Unit): CompactionOutcome {
         if (!turnLock.compareAndSet(false, true)) {
             throw IllegalStateException("a turn is already running")
         }
@@ -784,8 +890,11 @@ class AppState(val store: H2Store) {
             // same number the turn guard is: the one this backend proved, or the table's estimate for
             // this model. Two ceilings that disagree is how a fold overflows on a small model.
             val gateway = gatewayFactory(config)
-            val s = Compactor(config, contextWindowTokens()) { source, delta ->
-                gateway.completeOnce(Compactor.SUMMARY_SYSTEM_PROMPT, source, Compactor.SUMMARY_TOKENS, delta)
+            val window = contextWindowTokens()
+            val s = Compactor(config, window) { source, delta ->
+                gateway.completeOnce(
+                    Compactor.SUMMARY_SYSTEM_PROMPT, source, Compactor.summaryTokens(window), delta
+                )
             }.compact(session, keepLast, onDelta)
             persist()
             return s

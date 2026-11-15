@@ -30,6 +30,13 @@ class EditFileTool : Tool {
 
     override val name: String = "edit_file"
 
+    /**
+     * Always an update, never an add or a delete: the tool patches text inside a file it first
+     * reads, and a path it cannot read is a rejection rather than a created file. Reporting
+     * `add` for a file this tool could not have created would be a card that lies.
+     */
+    override val itemKind: dev.baudet.thread.ItemKind get() = dev.baudet.thread.ItemKind.FileChange
+
     override val description: String =
         "Change one file in the project folder by replacing exact text. " +
             "Give the exact old_text to find and the new_text to put in its place. " +

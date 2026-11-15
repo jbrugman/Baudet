@@ -94,6 +94,15 @@ data class AppConfig(
      */
     var trustedCommands: MutableList<String> = mutableListOf(),
 
+    /**
+     * Opt-in: let the git tool offer the write verbs add, commit, checkout, stash and push, each
+     * fenced to its safe shape by [dev.baudet.git.GitCommand] and gated on the project's Write
+     * right and a per-call approval. Default off, so the tool stays read-only until the user
+     * turns it on; even then a write only runs on a folder that grants Write and after the human
+     * approves that exact command, so a model cannot commit unattended.
+     */
+    var gitAllowWrites: Boolean = false,
+
     /** Blank = the built-in English default (model-facing, never translated); typed text always wins. */
     var systemPrompt: String = "",
 
