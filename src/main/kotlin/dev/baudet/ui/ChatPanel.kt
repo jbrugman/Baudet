@@ -224,6 +224,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         south.add(bottom, BorderLayout.SOUTH)
 
         centerSplit.topComponent = transcript.scroll.apply { minimumSize = Dimension(0, 0) }
+        applyWrap()
         centerSplit.bottomComponent = south
         add(centerSplit, BorderLayout.CENTER)
 
@@ -369,14 +370,23 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * cards are gone with the turn that produced them too, for the reason given on
      * [TranscriptView.rebuild] -- only prompts and answers are in the store.
      */
+    /** Re-apply the transcript wrap mode from saved config, so a Settings flip lands without a rebuild. */
+    fun applyWrap() {
+        transcript.wrap = state.config.transcriptWrap
+        transcript.applyWrap()
+    }
+
     fun refresh() {
         resetThinking()
         val s = state.session
-        transcript.rebuild(s.summary, s.messages)
+        // Prefer the persisted rows: a reload then rebuilds the cards, not just the prose.
+        if (s.items.isNotEmpty()) transcript.rebuildItems(s.summary, s.items)
+        else transcript.rebuild(s.summary, s.messages)
         status.foreground = BaudetPalette.dim
         status.text = statusLine()
         updateToolWarning()
         clearPendingImage()
+        applyWrap()
     }
 
     /**

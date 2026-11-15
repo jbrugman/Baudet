@@ -1,5 +1,8 @@
 package dev.baudet.thread
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
 /**
  * The lifecycle of one transcript item.
  *
@@ -9,11 +12,12 @@ package dev.baudet.thread
  * out loud over stdio serializes these names instead of translating them. Read the tag off
  * [wireName]; never invent a second spelling at a call site.
  */
+@Serializable
 enum class ItemStatus(val wireName: String) {
-    InProgress("inProgress"),
-    Completed("completed"),
-    Failed("failed"),
-    Interrupted("interrupted")
+    @SerialName("inProgress") InProgress("inProgress"),
+    @SerialName("completed") Completed("completed"),
+    @SerialName("failed") Failed("failed"),
+    @SerialName("interrupted") Interrupted("interrupted")
 }
 
 /**
@@ -26,15 +30,16 @@ enum class ItemStatus(val wireName: String) {
  * exists. The prefix marks it as an extension a protocol mapper must map or drop, never pass
  * through as if the backend had invented it.
  */
+@Serializable
 enum class ItemKind(val wireName: String) {
-    UserMessage("userMessage"),
-    AgentMessage("agentMessage"),
-    Reasoning("reasoning"),
-    CommandExecution("commandExecution"),
-    FileChange("fileChange"),
-    Plan("plan"),
-    Error("error"),
-    ToolCall("baudet/toolCall")
+    @SerialName("userMessage") UserMessage("userMessage"),
+    @SerialName("agentMessage") AgentMessage("agentMessage"),
+    @SerialName("reasoning") Reasoning("reasoning"),
+    @SerialName("commandExecution") CommandExecution("commandExecution"),
+    @SerialName("fileChange") FileChange("fileChange"),
+    @SerialName("plan") Plan("plan"),
+    @SerialName("error") Error("error"),
+    @SerialName("baudet/toolCall") ToolCall("baudet/toolCall")
 }
 
 /**
@@ -43,28 +48,32 @@ enum class ItemKind(val wireName: String) {
  * "Always" pin already is in spirit -- a grant that outlives the turn -- so the decision a
  * card records and the pin the store keeps can be reconciled in one place later.
  */
+@Serializable
 enum class ApprovalDecision(val wireName: String) {
-    Accept("accept"),
-    AcceptForSession("acceptForSession"),
-    Decline("decline"),
-    Cancel("cancel")
+    @SerialName("accept") Accept("accept"),
+    @SerialName("acceptForSession") AcceptForSession("acceptForSession"),
+    @SerialName("decline") Decline("decline"),
+    @SerialName("cancel") Cancel("cancel")
 }
 
 /** The kind of write a file-change item stands for. */
+@Serializable
 enum class FileChangeKind(val wireName: String) {
-    Add("add"),
-    Update("update"),
-    Delete("delete")
+    @SerialName("add") Add("add"),
+    @SerialName("update") Update("update"),
+    @SerialName("delete") Delete("delete")
 }
 
 /** One line of a plan. The plan tool does not exist yet; the vocabulary does, so a card can. */
+@Serializable
 enum class PlanEntryStatus(val wireName: String) {
-    Pending("pending"),
-    InProgress("inProgress"),
-    Completed("completed")
+    @SerialName("pending") Pending("pending"),
+    @SerialName("inProgress") InProgress("inProgress"),
+    @SerialName("completed") Completed("completed")
 }
 
 /** One checklist line of a plan item. */
+@Serializable
 data class PlanEntry(val content: String, val status: PlanEntryStatus)
 
 /**
@@ -74,6 +83,7 @@ data class PlanEntry(val content: String, val status: PlanEntryStatus)
  * list: a position only means something while one task runs, and several tasks at once is
  * exactly what the studio hardware makes possible.
  */
+@Serializable
 sealed class Item {
     abstract val itemId: String
     abstract val kind: ItemKind
@@ -81,6 +91,8 @@ sealed class Item {
 }
 
 /** The instruction as the human sent it. */
+@Serializable
+@SerialName("userMessage")
 data class UserMessageItem(
     override val itemId: String,
     val text: String,
@@ -94,6 +106,8 @@ data class UserMessageItem(
  * is not simply "the answer": the row the model wrote before it asked to run a command is
  * its own item, exactly as the app-server shows a step before a command card.
  */
+@Serializable
+@SerialName("agentMessage")
 data class AgentMessageItem(
     override val itemId: String,
     val text: String = "",
@@ -106,6 +120,8 @@ data class AgentMessageItem(
  * Reasoning streamed with a reply. Display-only: it is never replayed into a prompt, so an
  * item here records what was shown, not what was sent.
  */
+@Serializable
+@SerialName("reasoning")
 data class ReasoningItem(
     override val itemId: String,
     val text: String = "",
@@ -124,6 +140,8 @@ data class ReasoningItem(
  * never started are not exit code 0, and reporting them as one is the exact dishonesty this
  * app was written against.
  */
+@Serializable
+@SerialName("commandExecution")
 data class CommandExecutionItem(
     override val itemId: String,
     val command: String,
@@ -144,6 +162,8 @@ data class CommandExecutionItem(
  * the edit tool, and [additions]/[deletions] are counted from it so a card header and a
  * turn's diff summary agree on one number.
  */
+@Serializable
+@SerialName("fileChange")
 data class FileChangeItem(
     override val itemId: String,
     val path: String,
@@ -157,6 +177,8 @@ data class FileChangeItem(
 }
 
 /** A tool the interface has no dedicated card for yet: `read_file`, and the read-only `git`. */
+@Serializable
+@SerialName("baudet/toolCall")
 data class ToolCallItem(
     override val itemId: String,
     val tool: String,
@@ -169,6 +191,8 @@ data class ToolCallItem(
 }
 
 /** The plan checklist. Reserved: nothing emits one until Baudet has a plan tool. */
+@Serializable
+@SerialName("plan")
 data class PlanItem(
     override val itemId: String,
     val entries: List<PlanEntry> = emptyList(),
@@ -178,6 +202,8 @@ data class PlanItem(
 }
 
 /** A turn-level failure, shown where it happened instead of only in a status line. */
+@Serializable
+@SerialName("error")
 data class ErrorItem(
     override val itemId: String,
     val message: String,

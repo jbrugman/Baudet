@@ -80,6 +80,10 @@ fun main(args: Array<String>) {
                 shown = Texts.language
                 val previous = layout
                 SwingUtilities.invokeLater { layout = show(state, frame, previous) }
+            } else {
+                // A non-language change still reaches the open chat without a rebuild; the
+                // transcript wrap mode is the setting that shows up on the live conversation.
+                layout.chat.applyWrap()
             }
         }
 
@@ -109,7 +113,7 @@ fun main(args: Array<String>) {
  * across. The file panel rides along for the sake of the bar inside it: the split between the
  * tree and the change list is the panel's own business, but its height belongs to the layout.
  */
-private data class MainLayout(val left: JSplitPane, val right: JSplitPane, val files: FileTreePanel)
+private data class MainLayout(val left: JSplitPane, val right: JSplitPane, val files: FileTreePanel, val chat: ChatPanel)
 
 /** (Re)build every panel in the active language and put it on screen. */
 private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLayout {
@@ -183,7 +187,7 @@ private fun show(state: AppState, frame: JFrame, previous: MainLayout?): MainLay
     settings.reload()
     frame.contentPane.revalidate()
     frame.contentPane.repaint()
-    return MainLayout(left, split, files)
+    return MainLayout(left, split, files, chat)
 }
 
 /**

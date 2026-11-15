@@ -4,6 +4,7 @@ import dev.baudet.config.AppConfig
 import dev.baudet.project.Project
 import dev.baudet.project.ProjectIds
 import dev.baudet.session.Msg
+import dev.baudet.thread.Item
 import java.sql.Connection
 import java.sql.DriverManager
 
@@ -27,6 +28,8 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
                 "previous_response_id VARCHAR(255), last_seq INT, updated_at BIGINT)",
             "CREATE TABLE IF NOT EXISTS messages(session_id VARCHAR(64), seq INT, role VARCHAR(32), " +
                 "content CLOB, response_id VARCHAR(255), prompt_tokens BIGINT, " +
+                "PRIMARY KEY(session_id, seq))",
+            "CREATE TABLE IF NOT EXISTS items(session_id VARCHAR(64), seq INT, payload CLOB NOT NULL, " +
                 "PRIMARY KEY(session_id, seq))",
             "CREATE TABLE IF NOT EXISTS projects(id VARCHAR(64) PRIMARY KEY, name VARCHAR(255) NOT NULL, " +
                 "folder_path VARCHAR(1024), perms INT, archived BOOLEAN, created_at BIGINT)",
@@ -165,11 +168,64 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
         }
     }
 
+    override fun items(sessionId: String): List<Item> =
+        db.prepareStatement(
+            "SELECT payload FROM items WHERE session_id = ? ORDER BY seq"
+        ).use { ps ->
+            ps.setString(1, sessionId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        // A row that no longer decodes is dropped rather than failing the read,
+                        // the same tolerance the stored config gets: one stale card must not
+                        // erase the conversation around it.
+                        try {
+                            add(dev.baudet.api.json.decodeFromString(Item.serializer(), rs.getString(1)))
+                        } catch (e: Exception) {
+                            System.err.println("skipping unreadable transcript item: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+
+    override fun rewriteItems(sessionId: String, items: List<Item>) {
+        val auto = db.autoCommit
+        db.autoCommit = false
+        try {
+            db.prepareStatement("DELETE FROM items WHERE session_id = ?").use { ps ->
+                ps.setString(1, sessionId)
+                ps.executeUpdate()
+            }
+            db.prepareStatement(
+                "INSERT INTO items(session_id, seq, payload) VALUES(?, ?, ?)"
+            ).use { ps ->
+                items.forEachIndexed { i, item ->
+                    ps.setString(1, sessionId)
+                    ps.setInt(2, i)
+                    ps.setString(3, dev.baudet.api.json.encodeToString(Item.serializer(), item))
+                    ps.addBatch()
+                }
+                ps.executeBatch()
+            }
+            db.commit()
+        } catch (e: Exception) {
+            db.rollback()
+            throw e
+        } finally {
+            db.autoCommit = auto
+        }
+    }
+
     override fun deleteSession(id: String) {
         val auto = db.autoCommit
         db.autoCommit = false
         try {
             db.prepareStatement("DELETE FROM messages WHERE session_id = ?").use { ps ->
+                ps.setString(1, id)
+                ps.executeUpdate()
+            }
+            db.prepareStatement("DELETE FROM items WHERE session_id = ?").use { ps ->
                 ps.setString(1, id)
                 ps.executeUpdate()
             }
@@ -263,6 +319,12 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
         try {
             db.prepareStatement(
                 "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)"
+            ).use { ps ->
+                ps.setString(1, id)
+                ps.executeUpdate()
+            }
+            db.prepareStatement(
+                "DELETE FROM items WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)"
             ).use { ps ->
                 ps.setString(1, id)
                 ps.executeUpdate()

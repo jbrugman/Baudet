@@ -218,6 +218,26 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Ajoute les commandes d'écriture à l'outil git. Chacune exige toujours le droit d'écriture du projet et votre approbation sur sa carte avant de s'exécuter ; les push forcés, les réécritures d'historique et les stash destructifs restent bloqués.",
         "Fügt dem git-Werkzeug die Schreibbefehle hinzu. Jeder benötigt weiterhin das Schreibrecht des Projekts und Ihre Genehmigung auf seiner Karte vor der Ausführung; Pushes mit Kraft, Umschreiben der Historie und destruktive Stashes bleiben gesperrt."
     ),
+    TranscriptWrap(
+        "wrap long lines in the transcript",
+        "lange regels in het transcript afbreken",
+        "retourner les lignes longues dans le transcript",
+        "Lange Zeilen im Transkript umbrechen"
+    ),
+    TipTranscriptWrap(
+        "On: a line longer than the pane folds to fit. Off: the line stays whole and a horizontal scrollbar appears, which suits diffs and long paths.",
+        "Aan: een regel breder dan het paneel vouwt zich. Uit: de regel blijft heel en er verschijnt een horizontale scrollbalk, handig voor diffs en lange paden.",
+        "Activé : une ligne plus large que le panneau se replie. Désactivé : la ligne reste entière et une barre de défilement horizontale apparaît, adaptée aux diffs et aux chemins longs.",
+        "Ein: eine Zeile, die breiter als der Bereich ist, wird umgebrochen. Aus: die Zeile bleibt ganz und ein horizontaler Scrollbalken erscheint, passend für Diffs und lange Pfade."
+    ),
+    MaxParallelTurnsLabel("max parallel turns", "max parallelle beurten", "tours parallèles max", "max. parallele Runden"),
+    TipMaxParallelTurns(
+        "How many turns to run at once. Raise it on a big local machine; keep 1 on a small laptop. The app honours it as far as its conversation model allows today.",
+        "Hoeveel beurten je tegelijk draait. Zet het hoger op een grote lokale machine; houd 1 op een kleine laptop. De app eert het voor zover zijn gespreksmodel dat vandaag toelaat.",
+        "Nombre de tours à exécuter à la fois. Augmentez-le sur une grosse machine locale ; gardez 1 sur un petit ordinateur portable. L'application le respecte dans la limite de son modèle de conversation actuel.",
+        "Wie viele Runden gleichzeitig laufen. Auf einem großen lokalen Rechner erhöhen; auf einem kleinen Laptop bei 1 bleiben. Die App beachtet den Wert, soweit ihr Gesprächsmodell es heute zulässt."
+    ),
+    ErrMaxParallelTurns("max parallel turns must be 1 or more", "max parallelle beurten moet 1 of meer zijn", "le nombre de tours parallèles max doit être au moins 1", "max. parallele Runden müssen mindestens 1 sein"),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
     ErrMaxTokens("max output tokens must be 0 or a positive number", "max output tokens moet 0 of een positief getal zijn", "les jetons de sortie max doivent être 0 ou un nombre positif", "max. Ausgabetoken muss 0 oder eine positive Zahl sein"),
