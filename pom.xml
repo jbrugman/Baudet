@@ -24,7 +24,7 @@
     <!-- Kotest BehaviorSpec is given/when/then as executable structure. Tests
          run on the JVM only; native-image packages main, so the reflection in
          any test framework never reaches the native binary. -->
-    <kotest.version>6.2.6</kotest.version>
+    <kotest.version>6.2.7</kotest.version>
     <surefire.version>3.6.1</surefire.version>
     <mainClass>dev.baudet.MainKt</mainClass>
   </properties>
