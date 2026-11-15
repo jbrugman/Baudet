@@ -70,4 +70,38 @@ class ResponsesRequestSpec : BehaviorSpec({
             }
         }
     }
+
+    given("an attached image on the current prompt") {
+        `when`("building the request with text and an image") {
+            val req = client.buildRequest(
+                system = "sys",
+                history = emptyList(),
+                userText = "describe this",
+                previousResponseId = null,
+                tools = null,
+                image = "data:image/png;base64,AAA"
+            )
+            then("the prompt becomes a text part and an image part") {
+                val content = ((req["input"] as JsonArray).last() as JsonObject)["content"] as JsonArray
+                (content[0] as JsonObject)["type"]!!.jsonPrimitive.content shouldBe "input_text"
+                (content[1] as JsonObject)["type"]!!.jsonPrimitive.content shouldBe "input_image"
+                (content[1] as JsonObject)["image_url"]!!.jsonPrimitive.content shouldBe "data:image/png;base64,AAA"
+            }
+        }
+        `when`("building the request with only an image") {
+            val req = client.buildRequest(
+                system = "sys",
+                history = emptyList(),
+                userText = "",
+                previousResponseId = null,
+                tools = null,
+                image = "data:image/png;base64,AAA"
+            )
+            then("only the image part is sent") {
+                val content = ((req["input"] as JsonArray).last() as JsonObject)["content"] as JsonArray
+                content.size shouldBe 1
+                (content[0] as JsonObject)["type"]!!.jsonPrimitive.content shouldBe "input_image"
+            }
+        }
+    }
 })

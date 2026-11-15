@@ -18,6 +18,7 @@ interface TurnSource {
         previousResponseId: String?,
         tools: String? = null,
         onDelta: (String) -> Unit = {},
-        onReasoning: (String) -> Unit = {}
+        onReasoning: (String) -> Unit = {},
+        image: String? = null
     ): Turn
 }

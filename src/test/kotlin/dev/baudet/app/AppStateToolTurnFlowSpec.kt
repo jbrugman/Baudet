@@ -116,7 +116,8 @@ private class FakeToolGateway : ModelGateway {
         tools: String?,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
-        token: CancellationToken
+        token: CancellationToken,
+        image: String?
     ): Turn {
         val action = actions.removeFirstOrNull()
             ?: { _, on -> on("default"); Turn("default", "resp-default", null, "response.completed") }

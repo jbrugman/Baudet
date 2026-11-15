@@ -36,7 +36,8 @@ class ResponsesTurnSource(
         previousResponseId: String?,
         tools: String?,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit
+        onReasoning: (String) -> Unit,
+        image: String?
     ): Turn {
         // Bounded by the same policy that opened the turn: under a trimming strategy this caps each
         // request to the budget as observations pile up, not just the first one.
@@ -45,7 +46,8 @@ class ResponsesTurnSource(
             underServerSession = previousResponseId != null, keepRecent = keepRecent
         )
         return gateway.turn(
-            system, prior, userText, previousResponseId, tools, onDelta, onReasoning, token = token
+            system, prior, userText, previousResponseId, tools, onDelta, onReasoning,
+            token = token, image = image
         )
     }
 }

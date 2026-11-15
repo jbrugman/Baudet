@@ -129,6 +129,21 @@ class AppStateTurnFlowSpec : BehaviorSpec({
             }
         }
     }
+    given("a message carrying an attached image") {
+        val f = fixture { gw ->
+            gw.actions.add { _, on -> on("ok"); Turn("ok", "resp-img", null, "response.completed") }
+        }
+        `when`("a send carries an image data url") {
+            f.state.send("describe this", onDelta = {}, image = "data:image/png;base64,AAA")
+            then("the gateway sees the image on that turn") {
+                f.gateway.calls.size shouldBe 1
+                f.gateway.calls.single().image shouldBe "data:image/png;base64,AAA"
+            }
+            then("the image is not stored in the transcript") {
+                f.state.session.messages.map { it.content } shouldBe listOf("describe this", "ok")
+            }
+        }
+    }
 })
 
 /** A fresh store plus the AppState bound to it, and the scripted gateway installed on that state. */
@@ -153,7 +168,8 @@ private data class TurnCall(
     val history: List<Msg>,
     val userText: String,
     val previousResponseId: String?,
-    val tools: String?
+    val tools: String?,
+    val image: String?
 )
 
 /** A scripted [ModelGateway]: it forwards nothing, records the turns it was handed, and runs one
@@ -172,9 +188,10 @@ private class FakeGateway : ModelGateway {
         tools: String?,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
-        token: CancellationToken
+        token: CancellationToken,
+        image: String?
     ): Turn {
-        calls.add(TurnCall(system, history.toList(), userText, previousResponseId, tools))
+        calls.add(TurnCall(system, history.toList(), userText, previousResponseId, tools, image))
         val action = actions.removeFirstOrNull()
             ?: { _, on -> on("default"); Turn("default", "resp-default", null, "response.completed") }
         return action(token, onDelta)

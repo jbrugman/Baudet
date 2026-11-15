@@ -23,7 +23,8 @@ interface ModelGateway {
         tools: String? = null,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {},
-        token: CancellationToken = CancellationToken.NONE
+        token: CancellationToken = CancellationToken.NONE,
+        image: String? = null
     ): Turn
 
     /** A one-off call that is not stored, used by the compactor; mirrors ResponsesClient.completeOnce. */

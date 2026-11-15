@@ -35,13 +35,15 @@ class ToolLoopSpec : BehaviorSpec({
     class Scripted(private val replies: List<Turn>) : TurnSource {
         var i = 0
         val seen = mutableListOf<List<Msg>>()
-        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn {
+        val images = mutableListOf<String?>()
+        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit, image: String?): Turn {
             seen.add(history.toList())
+            images.add(image)
             return replies[i.coerceAtMost(replies.lastIndex)].also { i++ }
         }
     }
     class AlwaysCall(private val reply: Turn) : TurnSource {
-        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit): Turn = reply
+        override fun nextTurn(history: List<Msg>, previousResponseId: String?, tools: String?, onDelta: (String) -> Unit, onReasoning: (String) -> Unit, image: String?): Turn = reply
     }
 
     given("a model that answers without calling a tool") {
@@ -190,6 +192,17 @@ class ToolLoopSpec : BehaviorSpec({
                 (outcome is LoopOutcome.Completed) shouldBe true
                 (outcome as LoopOutcome.Completed).finalText shouldBe "settled"
                 outcome.capReached shouldBe true
+            }
+        }
+    }
+
+    given("a turn that attaches an image") {
+        val source = Scripted(listOf(turn(callText("noop"), "r1"), turn("done", "r2")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("the loop runs with an image on the prompt") {
+            loop.run(seed("look at this"), ctx = ctx, image = "data:image/png;base64,AAA")
+            then("the image rides only the first model request") {
+                source.images shouldBe listOf("data:image/png;base64,AAA", null)
             }
         }
     }
