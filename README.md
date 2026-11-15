@@ -303,3 +303,5 @@ Screenshots of the running app (macOS, bundled runtime):
 ![Baudet](Docs/Screenshots/screenshot_02.png)
 
 ![Baudet](Docs/Screenshots/screenshot_03.png)
+
+![Baudet](Docs/Screenshots/screenshot_04.png)
