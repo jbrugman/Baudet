@@ -11,7 +11,6 @@ import java.awt.Dialog
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
-import java.awt.GraphicsEnvironment
 import java.awt.Insets
 import java.awt.Rectangle
 import javax.swing.JButton
@@ -118,14 +117,27 @@ object DiffViewDialog {
         // saved spot once the window is displayable.
         dialog.pack()
         place(dialog, owner, rememberedX, rememberedY, rememberedW, rememberedH)
-        dialog.isVisible = true
-        val x = dialog.x
-        val y = dialog.y
-        val width = dialog.width
-        val height = dialog.height
-        dialog.dispose()
-        if (WindowLayout.shouldRememberDialogSize(width, height, MIN_SIZE))
-            onClosed(x, y, width, height)
+        var shown: Rectangle? = null
+        try {
+            dialog.isVisible = true
+            // The bounds are read while the window is still displayable, because disposing can
+            // release the native peer that reports them, and those bounds are exactly what is
+            // worth remembering.
+            shown = Rectangle(dialog.x, dialog.y, dialog.width, dialog.height)
+        } finally {
+            // Disposing is not optional and no read above may be able to skip it. A hidden window
+            // that is never disposed keeps its native peer, which leaves a phantom in the window
+            // list and holds the application open after its last visible window has closed.
+            dialog.dispose()
+        }
+        // Reaching this line means setVisible returned, so shown holds the bounds -- a throw leaves
+        // through the finally and never comes back here. The flow analysis proves that as well, so
+        // neither an elvis nor a non-null assertion is needed here, and both are warned about for
+        // good reason: they would plan for bounds that cannot be missing. The nullable var is there
+        // for the definite-assignment rule around the finally, not for a real absence.
+        val bounds = shown
+        if (WindowLayout.shouldRememberDialogSize(bounds.width, bounds.height, MIN_SIZE))
+            onClosed(bounds.x, bounds.y, bounds.width, bounds.height)
     }
 
     /**
@@ -206,9 +218,12 @@ object DiffViewDialog {
     }
 
     /**
-     * Put the dialog at the spot the user left it when a size was stored and that spot still
-     * lands on a screen; otherwise center it on [owner]. The stored size is the flag that a
-     * position exists at all, so a first open centers rather than jumping to the origin.
+     * Put the dialog at the spot the user left it when a size was stored and that spot can still
+     * be reached; otherwise center it on [owner]. The stored size is the flag that a position
+     * exists at all, so a first open centers rather than jumping to the origin. Reachability is
+     * [WindowLayout.rememberedOriginIsReachable], the same rule the main window uses, because a
+     * spot the bar cannot be gripped from is not a place the user left the window at -- it is a
+     * window that cannot be moved any more.
      */
     private fun place(
         dialog: JDialog,
@@ -222,9 +237,8 @@ object DiffViewDialog {
             dialog.setLocationRelativeTo(owner)
             return
         }
-        val saved = Rectangle(x, y, w, h)
-        val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
-        if (screen.intersects(saved)) dialog.setLocation(x, y)
+        if (WindowLayout.rememberedOriginIsReachable(x, y, WindowLayout.screens()))
+            dialog.setLocation(x, y)
         else dialog.setLocationRelativeTo(owner)
     }
 

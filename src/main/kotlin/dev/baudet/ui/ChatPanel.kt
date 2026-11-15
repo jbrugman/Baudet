@@ -7,8 +7,8 @@ import dev.baudet.app.ToolGate
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
 import dev.baudet.io.ImageClipboard
+import dev.baudet.session.CompactionOutcome
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
@@ -59,13 +59,15 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         private const val EXPAND_ARROW = "\u25b8"
     }
 
-    private val doc = DefaultStyledDocument()
-    private val pane = JTextPane(doc).apply {
-        isEditable = false
-        font = Font(Font.MONOSPACED, Font.PLAIN, 13)
-        margin = Insets(8, 8, 8, 8)
+    /**
+     * The transcript: one card per step the model took, filled by the events of the turn. This
+     * replaced one flat text document, which could colour a run of characters but could not hold
+     * a component -- so a command the reader's own machine ran, and the write that followed it,
+     * had nowhere to be drawn and the turn read as prose only.
+     */
+    private val transcript = TranscriptView().apply {
+        onApproval = { id, decision -> state.resolveApproval(id, decision) }
     }
-    private val scroll = JScrollPane(pane).apply { minimumSize = Dimension(0, 0) }
 
     private val input = JTextArea(4, 60).apply {
         font = Font(Font.MONOSPACED, Font.PLAIN, 13)
@@ -89,25 +91,18 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
     /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
     private val toolWarning = JLabel().apply {
-        foreground = Color(224, 178, 74)
+        foreground = BaudetPalette.warn
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
         border = EmptyBorder(2, 8, 2, 8)
         alignmentX = LEFT_ALIGNMENT
         isVisible = false
     }
 
-    private val normal = SimpleAttributeSet().apply {
+    /** Reasoning reads as an aside: gray and italic, so the answer stays dominant. */
+    private val reasoningStyle = SimpleAttributeSet().apply {
         StyleConstants.setFontFamily(this, Font.MONOSPACED)
         StyleConstants.setFontSize(this, 13)
-    }
-    private val dim = SimpleAttributeSet(normal).apply {
-        StyleConstants.setForeground(this, Color(150, 150, 150))
-    }
-    private val error = SimpleAttributeSet(normal).apply {
-        StyleConstants.setForeground(this, Color(235, 110, 110))
-    }
-    /** Reasoning reads as an aside: gray and italic, so the answer stays dominant. */
-    private val reasoningStyle = SimpleAttributeSet(dim).apply {
+        StyleConstants.setForeground(this, BaudetPalette.dim)
         StyleConstants.setItalic(this, true)
     }
 
@@ -130,7 +125,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val thinkingHeader = JPanel(BorderLayout()).apply {
         isVisible = false
         add(JLabel(Texts[Key.ReasoningLabel]).apply {
-            foreground = Color(150, 150, 150)
+            foreground = BaudetPalette.dim
             font = Font(Font.MONOSPACED, Font.PLAIN, 12)
             border = EmptyBorder(2, 8, 2, 8)
         }, BorderLayout.WEST)
@@ -175,37 +170,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     /** True while [placeCenter] moves the divider itself, so that move is never treated as a drag. */
     private var placingCenter = false
 
-    /** The renderer of the live turn, so that completion and failure can both flush its tail. */
-    private var lastRender: TurnRender? = null
     private var thinkingCollapsed = false
     private var hasThinking = false
-
-    private val bold = SimpleAttributeSet(normal).apply { StyleConstants.setBold(this, true) }
-    private val italic = SimpleAttributeSet(normal).apply { StyleConstants.setItalic(this, true) }
-    private val heading = SimpleAttributeSet(bold).apply { StyleConstants.setFontSize(this, 15) }
-    /**
-     * Inline code is the one run that needs a background to read as code, since every glyph in
-     * this transcript is already monospaced. A fenced block only tints its lines: a background
-     * on a whole line would paint one bar per line, and those bars end wherever the code does.
-     */
-    private val codeSpan = SimpleAttributeSet(normal).apply {
-        StyleConstants.setBackground(this, Color(45, 45, 48))
-        StyleConstants.setForeground(this, Color(206, 206, 211))
-    }
-    private val codeBlock = SimpleAttributeSet(normal).apply {
-        StyleConstants.setForeground(this, Color(196, 207, 224))
-    }
-
-    /** The parser names an intent; this is where that intent becomes a Swing attribute. */
-    private fun attrsFor(kind: SpanKind) = when (kind) {
-        SpanKind.Plain -> normal
-        SpanKind.Bold -> bold
-        SpanKind.Italic -> italic
-        SpanKind.Heading -> heading
-        SpanKind.Code -> codeSpan
-        SpanKind.CodeBlock -> codeBlock
-        SpanKind.Marker -> dim
-    }
 
     private var busy = false
 
@@ -257,7 +223,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         bottom.add(status)
         south.add(bottom, BorderLayout.SOUTH)
 
-        centerSplit.topComponent = scroll
+        centerSplit.topComponent = transcript.scroll.apply { minimumSize = Dimension(0, 0) }
         centerSplit.bottomComponent = south
         add(centerSplit, BorderLayout.CENTER)
 
@@ -314,11 +280,6 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 override fun actionPerformed(e: ActionEvent) = pasteOrAttach()
             }
         )
-    }
-
-    private fun append(text: String, attrs: SimpleAttributeSet = normal) {
-        doc.insertString(doc.length, text, attrs)
-        pane.caretPosition = doc.length
     }
 
     /**
@@ -403,35 +364,19 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         if (atTail) bar.value = bar.maximum
     }
 
-    /** Full redraw from the session state. Reasoning is gone by design: not stored. */
+    /**
+     * Full redraw from the session state. Reasoning is gone by design: not stored. The step
+     * cards are gone with the turn that produced them too, for the reason given on
+     * [TranscriptView.rebuild] -- only prompts and answers are in the store.
+     */
     fun refresh() {
-        doc.remove(0, doc.length)
         resetThinking()
         val s = state.session
-        s.summary?.let { append(Texts.fmt(Key.SummaryBanner, it.length) + "\n\n", dim) }
-        s.messages.forEach { m ->
-            // History mirrors the live turn: an answer is re-rendered through the same
-            // markdown stream, so a reload shows what the user first saw. A user line
-            // stays raw because it is the prompt, not a rendered answer.
-            append(if (m.role == "assistant") Texts[Key.BaudetLabel] else Texts[Key.YouLabel], dim)
-            if (m.role == "assistant") renderAnswer(m.content) else append(m.content + "\n\n")
-        }
-        status.foreground = Color(160, 160, 160)
+        transcript.rebuild(s.summary, s.messages)
+        status.foreground = BaudetPalette.dim
         status.text = statusLine()
         updateToolWarning()
         clearPendingImage()
-    }
-
-    /**
-     * Re-render a stored answer through the same markdown stream a live turn uses, so a
-     * reload or session switch shows the styling the user first saw while it streamed in.
-     * A user line is not routed here: it is the prompt, kept raw by the caller.
-     */
-    private fun renderAnswer(content: String) {
-        val stream = MarkdownStream { text, kind -> append(text, attrsFor(kind)) }
-        stream.write(content)
-        stream.flush()
-        append("\n\n")
     }
 
     /**
@@ -494,11 +439,11 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         sendButton.text = if (b) Texts[Key.SteerButton] else Texts[Key.SendButton]
         stopButton.isEnabled = b
         newSessionButton.isEnabled = !b
-        status.foreground = if (b) Color(160, 160, 160) else Color(120, 200, 130)
+        status.foreground = if (b) BaudetPalette.dim else BaudetPalette.ok
     }
 
     private fun fail(msg: String) {
-        status.foreground = Color(235, 110, 110)
+        status.foreground = BaudetPalette.error
         status.text = msg
     }
 
@@ -518,9 +463,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     /** Close a turn the user stopped: keep what streamed in, mark the status as stopped. */
     private fun stoppedTurn() {
-        lastRender?.flush()
-        append("\n\n")
-        status.foreground = Color(224, 178, 74)
+        status.foreground = BaudetPalette.warn
         status.text = Texts[Key.TurnStopped]
         setBusy(false)
         // A steer queued a follow-up before cutting this turn. The stopped turn has already
@@ -534,12 +477,14 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /**
-     * The pre-send refusal, now raised off the EDT after an auto-compaction that still left the
-     * conversation over budget. The prompt is already echoed (the turn lock is held), so show the
-     * reason inline, surface it in the status, and release the lock. Nothing reached the backend.
+     * The pre-send refusal, raised off the EDT after an auto-compaction that still left the
+     * conversation over budget. Nothing reached the backend, so no turn ever opened and no event
+     * will carry these two rows: the prompt the composer already cleared has to be echoed here,
+     * followed by the reason, and then the lock is released.
      */
-    private fun overBudget(reason: String) {
-        append("\n" + reason + "\n\n", error)
+    private fun overBudget(text: String, image: String?, reason: String) {
+        transcript.prompt(text, image != null)
+        transcript.failure(reason)
         fail(reason)
         setBusy(false)
     }
@@ -573,7 +518,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun steer(text: String) {
         steerPending = text
         input.text = ""
-        status.foreground = Color(160, 160, 160)
+        status.foreground = BaudetPalette.dim
         status.text = Texts[Key.SteerQueued]
         cancelled = true
         state.cancelTurn()
@@ -582,22 +527,25 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     /** Run one turn: echo the prompt, then ask the backend on a worker thread. */
     private fun sendNow(text: String, image: String? = null) {
-        beginTurn(text, image)
+        beginTurn(image)
 
-        // A fresh renderer per turn scopes both the markdown stream and the dock to one
-        // answer; callbacks fire on the worker thread, completion on the EDT.
+        // A fresh renderer per turn scopes the reasoning dock to one answer; its callbacks fire
+        // on the worker thread and completion is handled on the EDT.
         val render = TurnRender()
-        lastRender = render
         val t = Thread {
             try {
                 // contextGuard is a cheap local estimate, so it runs here rather than on the
                 // EDT. Under the trimming strategies it stays silent and send bounds the window
                 // itself; only under StopAtLimit does it refuse, here, before a request goes out.
                 state.contextGuard()?.let { reason ->
-                    SwingUtilities.invokeLater { overBudget(reason) }
+                    SwingUtilities.invokeLater { overBudget(text, image, reason) }
                     return@Thread
                 }
-                val turn = state.send(text, render::delta, render::reasoning, image)
+                // The transcript is driven by the turn's events rather than by the text callback:
+                // a row has to learn which item a chunk belongs to, and only the events say so.
+                // The delta callback is left empty on purpose -- routing it as well would draw
+                // every answer twice, once from the callback and once from its item.
+                val turn = state.send(text, {}, render::reasoning, image) { transcript.accept(it) }
                 SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
                 // A Stop interrupts this worker; that is a deliberate stop, not a backend failure,
@@ -614,18 +562,17 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         t.start()
     }
 
-    /** Take the busy lock and echo the prompt into the transcript before the reply. */
-    private fun beginTurn(text: String, image: String? = null) {
+    /** Take the busy lock; the turn's first event carries the prompt into the transcript. */
+    private fun beginTurn(image: String? = null) {
         input.text = ""
         resetThinking()
         cancelled = false
         setBusy(true)
         status.text = Texts[Key.Streaming]
-        append(Texts[Key.YouLabel], dim)
-        append(text + "\n")
-        if (image != null) append(Texts[Key.ImageAttached], dim)
-        append("\n")
-        append(Texts[Key.BaudetLabel], dim)
+        // The prompt is the turn's first item, so it is not echoed here -- that is also what keeps
+        // it from appearing twice. The picture is the one thing no item carries, so that marker
+        // alone is handed to the view in advance, for the row about to arrive.
+        if (image != null) transcript.expectImageOnNextPrompt()
         clearPendingImage()
     }
 
@@ -635,8 +582,6 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * nothing at all, which without this marker reads exactly like a good reply.
      */
     private fun finishTurn(turn: Turn) {
-        lastRender?.flush()
-        append("\n\n")
         val counts = "id=${turn.responseId ?: Texts[Key.None]} · " +
             "prompt=${turn.usage?.prompt} · completion=${turn.usage?.completion} · " +
             Texts.fmt(Key.LastEvent, turn.finalEvent ?: "?") + " · ${state.contextWarning()}"
@@ -667,15 +612,15 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * an oversized conversation too.
      */
     private fun turnFailed(e: Exception) {
-        lastRender?.flush()
-        append("\n" + Texts.fmt(Key.ErrorPrefix, e.message ?: "?") + "\n\n", error)
+        // The failure text itself already arrived as an error row of the turn, so it is not
+        // written again here; what the row cannot know is the way out.
         if (e is BackendException && e.contextOverflow) {
             // The refusal names the window this backend really has, which is knowledge the app did
             // not have before it asked. Recording it is what stops the next attempt repeating the
             // failure: the guard, the tool ceiling and the automatic fold all read that number from
             // then on, so the conversation gets folded instead of sent into a second refusal.
             state.learnContextWindow(e.claimedContextTokens)
-            append(Texts[Key.ContextOverflow] + "\n\n", error)
+            transcript.failure(Texts[Key.ContextOverflow])
             fail(Texts[Key.ContextOverflow])
         } else {
             fail(Texts[Key.TurnFailed])
@@ -684,23 +629,12 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Routes the two response streams. Reasoning streams ahead of the answer on this backend;
-     * both callbacks fire on the one worker thread and invokeLater preserves that order, so the
-     * first chunk of the aside is still the first thing the dock ever shows.
+     * Routes the reasoning stream to the dock. It stays a callback rather than a row on purpose:
+     * the aside is display-only and is never stored, which is what keeps it out of the context
+     * sent back to the model. Chunks fire on the worker thread and invokeLater preserves their
+     * order, so the first chunk is still the first thing the dock ever shows.
      */
     private inner class TurnRender {
-
-        /** Held per turn so that markdown never carries a half-open fence into the next answer. */
-        private val markdown = MarkdownStream { text, kind -> append(text, attrsFor(kind)) }
-
-        fun delta(delta: String) = SwingUtilities.invokeLater { markdown.write(delta) }
-
-        /**
-         * Release the line the stream is still holding. Both turn endings call this on the EDT,
-         * the same thread the writer runs on, so the buffer needs no lock and an answer that
-         * stops without a newline still reaches the screen whole.
-         */
-        fun flush() = markdown.flush()
 
         fun reasoning(chunk: String) = SwingUtilities.invokeLater {
             hasThinking = true
@@ -739,7 +673,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         attachmentStrip.isVisible = true
         attachmentStrip.revalidate()
         attachmentStrip.repaint()
-        status.foreground = Color(120, 200, 130)
+        status.foreground = BaudetPalette.ok
         status.text = Texts[Key.ImagePasted]
     }
 
@@ -768,12 +702,25 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.text = Texts[Key.Summarising]
         Thread {
             try {
-                val summary = state.compact(keepLast = 4) { }
+                val outcome = state.compact(keepLast = 4) { }
                 SwingUtilities.invokeLater {
                     refresh()
-                    status.foreground = Color(120, 200, 130)
-                    status.text = if (summary == null) Texts[Key.CompactionEmpty]
-                    else Texts.fmt(Key.CompactionDone, summary.length)
+                    // Green only for a fold that happened. A fold that cleared nothing is a fact the
+                    // user has to act on -- a turn too big to summarize, or an answer the backend
+                    // could not vouch for -- so it reads in the warning colour rather than in the
+                    // green of the success it is not.
+                    status.foreground =
+                        if (outcome is CompactionOutcome.Compacted) BaudetPalette.ok
+                        else BaudetPalette.warn
+                    status.text = when (outcome) {
+                        is CompactionOutcome.Compacted ->
+                            Texts.fmt(Key.CompactionDone, outcome.summary.length)
+                        CompactionOutcome.NothingToFold -> Texts[Key.TooFewTurns]
+                        is CompactionOutcome.OversizedTurn ->
+                            Texts.fmt(Key.CompactionOversizedTurn, outcome.maxChars)
+                        is CompactionOutcome.SummaryRefused ->
+                            Texts.fmt(Key.CompactionRefused, outcome.reason)
+                    }
                     setBusy(false)
                 }
             } catch (e: Exception) {

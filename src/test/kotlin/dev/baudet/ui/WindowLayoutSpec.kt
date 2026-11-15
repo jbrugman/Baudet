@@ -2,6 +2,7 @@ package dev.baudet.ui
 
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
+import java.awt.Rectangle
 
 class WindowLayoutSpec : BehaviorSpec({
 
@@ -61,6 +62,53 @@ class WindowLayoutSpec : BehaviorSpec({
             }
             then("a drag past the bottom clamps to zero") {
                 WindowLayout.componentHeightForDivider(splitHeight = 100, dividerLocation = 200, dividerSize = 10) shouldBe 0
+            }
+        }
+    }
+
+    /**
+     * A remembered window position is only worth restoring if the window can still be moved from
+     * it, which means its top-left corner -- where the title bar starts -- has to sit inside a real
+     * screen. The union of all screens cannot express this: it has no gaps and grazes at its edges,
+     * which is how a window ended up with its bar off-screen and no way left to drag it back.
+     */
+    given("a two-screen desk, the second screen starting at x=2100 so x=2000 is dead space") {
+        val screens = listOf(Rectangle(0, 0, 1920, 1080), Rectangle(2100, 0, 1920, 1080))
+        `when`("restoring a remembered origin") {
+            then("a corner inside a screen is restored") {
+                WindowLayout.rememberedOriginIsReachable(400, 200, screens) shouldBe true
+            }
+            then("a corner in the gap between the screens is not") {
+                WindowLayout.rememberedOriginIsReachable(2000, 500, screens) shouldBe false
+            }
+            then("that gap is exactly what the union of the screens accepted, which is the bug") {
+                Rectangle(0, 0, 4020, 1080).intersects(Rectangle(2000, 500, 560, 360)) shouldBe true
+            }
+            then("a corner grazing the far edge by nothing is not, since contains() ends one short") {
+                WindowLayout.rememberedOriginIsReachable(1920, 500, screens) shouldBe false
+            }
+            then("a corner below the screen after a resolution change is not") {
+                WindowLayout.rememberedOriginIsReachable(400, 1080, screens) shouldBe false
+            }
+            then("the very corner of the primary screen is") {
+                WindowLayout.rememberedOriginIsReachable(0, 0, screens) shouldBe true
+            }
+        }
+    }
+
+    given("a secondary screen placed to the left, at negative x") {
+        val screens = listOf(Rectangle(0, 0, 1920, 1080), Rectangle(-1600, 0, 1600, 1080))
+        `when`("restoring a remembered origin from that screen") {
+            then("it is restored, so the stricter rule does not strand a legitimate second monitor") {
+                WindowLayout.rememberedOriginIsReachable(-1200, 300, screens) shouldBe true
+            }
+        }
+    }
+
+    given("no screen reporting a configuration") {
+        `when`("restoring any remembered origin") {
+            then("nothing counts as reachable, so the window centers instead of vanishing") {
+                WindowLayout.rememberedOriginIsReachable(100, 100, emptyList()) shouldBe false
             }
         }
     }

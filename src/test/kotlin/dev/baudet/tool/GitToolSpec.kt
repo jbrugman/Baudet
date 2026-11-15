@@ -1,5 +1,6 @@
 package dev.baudet.tool
 
+import dev.baudet.git.GitCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -30,6 +31,16 @@ class GitToolSpec : FunSpec({
     fun ctx(root: Path?, readGranted: Boolean) = ToolContext(
         root = root, writeGranted = false, approve = { _, _ -> false }, readGranted = readGranted
     )
+
+    fun writeCtx(root: Path?, approved: Boolean, autoAllow: Set<String> = emptySet()) = ToolContext(
+        root = root, writeGranted = true, approve = { _, _ -> false }, readGranted = true,
+        approveCommand = { _, _, _ -> approved }, autoAllow = { autoAllow }
+    )
+
+    /** The paths the index currently holds, read straight from the throwaway repo. */
+    fun staged(dir: Path): String =
+        ProcessBuilder("git", "-C", dir.toString(), "diff", "--cached", "--name-only")
+            .redirectErrorStream(true).start().inputStream.readBytes().decodeToString().trim()
 
     fun args(command: String, vararg extra: String): JsonObject = buildJsonObject {
         put("command", command)
@@ -77,6 +88,62 @@ class GitToolSpec : FunSpec({
         val result = tool.execute(args("diff", "-c", "x=y"), ctx(tempDir().toAbsolutePath(), true))
         result.ok shouldBe false
         result.output shouldContain "not allowed"
+    }
+
+    test("a git write stages the file once the user approves it") {
+        val writing = GitTool(writesAllowed = true)
+        val dir = tempDir()
+        runGit(dir, "init", "-q")
+        Files.writeString(dir.resolve("a.txt"), "one\n")
+
+        val result = writing.execute(args("add", "a.txt"), writeCtx(dir.toAbsolutePath(), approved = true))
+        result.ok shouldBe true
+        staged(dir) shouldBe "a.txt"
+    }
+
+    test("a declined git write never stages the file") {
+        val writing = GitTool(writesAllowed = true)
+        val dir = tempDir()
+        runGit(dir, "init", "-q")
+        Files.writeString(dir.resolve("a.txt"), "one\n")
+
+        val result = writing.execute(args("add", "a.txt"), writeCtx(dir.toAbsolutePath(), approved = false))
+        result.ok shouldBe false
+        result.output shouldContain "declined"
+        staged(dir) shouldBe ""
+    }
+
+    test("a git write is refused when the folder grants no Write right, even with approval") {
+        val writing = GitTool(writesAllowed = true)
+        val noWrite = ToolContext(
+            root = tempDir().toAbsolutePath(), writeGranted = false,
+            approve = { _, _ -> false }, readGranted = true, approveCommand = { _, _, _ -> true }
+        )
+        val result = writing.execute(args("add", "a.txt"), noWrite)
+        result.ok shouldBe false
+        result.output shouldContain "Write"
+    }
+
+    test("a pinned git write skips the prompt, exactly as a pinned shell command does") {
+        val writing = GitTool(writesAllowed = true)
+        val dir = tempDir()
+        runGit(dir, "init", "-q")
+        Files.writeString(dir.resolve("a.txt"), "one\n")
+        val pin = CommandSignature.pinned(GitCommand.summary("add", listOf("a.txt"), null))
+
+        val result = writing.execute(
+            args("add", "a.txt"),
+            writeCtx(dir.toAbsolutePath(), approved = false, autoAllow = setOf(pin))
+        )
+        result.ok shouldBe true
+        staged(dir) shouldBe "a.txt"
+    }
+
+    test("a read-only tool, the default, never offers the write verb even when asked") {
+        // GitTool() builds with writesAllowed=false, mirroring gitAllowWrites off in Settings.
+        val result = tool.execute(args("add", "a.txt"), writeCtx(tempDir().toAbsolutePath(), approved = true))
+        result.ok shouldBe false
+        result.output shouldContain "disabled"
     }
 })
 

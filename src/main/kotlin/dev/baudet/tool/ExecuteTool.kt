@@ -27,6 +27,9 @@ class ExecuteTool : Tool {
 
     override val name: String = "run_command"
 
+    /** A shell run is the protocol's commandExecution item, so its card carries exit code and timing. */
+    override val itemKind: dev.baudet.thread.ItemKind get() = dev.baudet.thread.ItemKind.CommandExecution
+
     override val description: String =
         "Run a shell command (bash; python or other interpreters may be invoked from it) " +
             "with the project folder as its working directory. The command runs only " +
@@ -98,7 +101,14 @@ class ExecuteTool : Tool {
             )
             val head = if (result.timedOut) "run_command timed out after ${timeout}s (no exit code)"
             else "exit code: ${result.exitCode}"
-            ToolResult(ok = !result.timedOut && result.exitCode == 0, output = head + result.body())
+            ToolResult(
+                ok = !result.timedOut && result.exitCode == 0,
+                output = head + result.body(),
+                exitCode = result.exitCode,
+                timedOut = result.timedOut,
+                durationMs = result.durationMs,
+                cwd = cwd.toString()
+            )
         } catch (_: Exception) {
             fail("the command could not be started or completed")
         } finally {

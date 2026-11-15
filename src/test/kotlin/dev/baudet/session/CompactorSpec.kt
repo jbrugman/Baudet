@@ -131,6 +131,35 @@ class CompactorSpec : BehaviorSpec({
     }
 
     /**
+     * The other half of one summarization call: what the summary itself may spend. A constant here
+     * was a bound on a reasoning model's thinking as much as on its summary, because the fold sends
+     * no reasoning field, and a model that ends its answer at that bound is refused -- which leaves
+     * the conversation unfolded and the user staring at a button that appears to do nothing.
+     */
+    given("the output bound one summary call may ask for") {
+        `when`("deriving it from the model") {
+            then("a model with no known window gets the ceiling, since nothing bounds it") {
+                Compactor.summaryTokens(null) shouldBe 2_048
+            }
+            then("a large window still gets the ceiling, because a long summary is not the goal") {
+                Compactor.summaryTokens(262_144) shouldBe 2_048
+            }
+            then("the ceiling is exactly a quarter of the window it was written for") {
+                Compactor.summaryTokens(8_192) shouldBe 2_048
+            }
+            then("a small model bounds it, so the fold cannot ask for output it has no room for") {
+                Compactor.summaryTokens(4_096) shouldBe 1_024
+            }
+            then("a window too small to hold either half keeps the floor, or a model never answers") {
+                Compactor.summaryTokens(1_024) shouldBe 512
+            }
+            then("an unknown window of 0 means unknown, not no room") {
+                Compactor.summaryTokens(0) shouldBe 2_048
+            }
+        }
+    }
+
+    /**
      * The ceiling is what keeps a fold from losing text. A turn bigger than one summarization call
      * can only reach the model in pieces, and a piece it never read must never be cleared behind a
      * summary -- that is the silent loss this whole path exists to prevent. The fold stops at such
@@ -151,7 +180,7 @@ class CompactorSpec : BehaviorSpec({
         `when`("compacting with nothing kept verbatim") {
             val result = compactor.compact(state, keepLast = 0) {}
             then("nothing folds and the oversized turn survives untouched") {
-                result shouldBe null
+                result shouldBe CompactionOutcome.OversizedTurn(48_000)
                 state.messages.size shouldBe 1
                 state.messages[0].content shouldBe huge.content
             }
@@ -186,12 +215,192 @@ class CompactorSpec : BehaviorSpec({
                 seen[0].contains("cut here") shouldBe false
             }
             then("only the folded turns are cleared and the oversized turn is kept in full") {
-                result shouldBe "the summary"
+                result shouldBe CompactionOutcome.Compacted("the summary")
                 state.summary shouldBe "the summary"
                 state.messages.size shouldBe 3
                 state.messages[0].content shouldBe huge.content
                 state.messages[1].content shouldBe "keep one"
                 state.messages[2].content shouldBe "keep two"
+            }
+        }
+    }
+
+    /**
+     * What a fold reports when it clears nothing, and why. The status line used to read "compaction
+     * returned nothing" for all of these at once, which was untrue twice over: it sounded like an
+     * outage when no request had even been made, and it hid the reason when an answer did come back
+     * and could not be trusted. Each case is pinned to the signal the backend really sent, because
+     * that signal is what tells the user whether to raise a budget, leave the transcript as it is,
+     * or go look at the server -- and a refusal must still keep every turn, asserted alongside it.
+     */
+    given("a session with nothing before the kept tail") {
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(Msg("user", "one"), Msg("assistant", "two"))
+        )
+        var calls = 0
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { _, _ ->
+                calls++
+                Turn("x", null, null, "response.completed")
+            }
+        )
+        `when`("compacting while keeping both turns") {
+            val result = compactor.compact(state, keepLast = 2) {}
+            then("it says there was nothing to fold, rather than that a summary came back empty") {
+                result shouldBe CompactionOutcome.NothingToFold
+            }
+            then("nothing is sent and nothing is touched") {
+                calls shouldBe 0
+                state.messages.size shouldBe 2
+                state.summary shouldBe null
+            }
+        }
+    }
+
+    given("a summarizer whose answer was cut off at the output bound") {
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(
+                Msg("user", "q1"), Msg("assistant", "a1"),
+                Msg("user", "q2"), Msg("assistant", "a2")
+            )
+        )
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { _, _ ->
+                Turn(
+                    "a summary that stops mid sentence", null, null, "response.incomplete",
+                    incompleteReason = "max_output_tokens"
+                )
+            }
+        )
+        `when`("compacting and keeping the last two turns") {
+            val result = compactor.compact(state, keepLast = 2) {}
+            then("it names the truncation and the bound it hit, not just that nothing came back") {
+                result shouldBe CompactionOutcome.SummaryRefused("incomplete: max_output_tokens (2048)")
+            }
+            then("every turn survives, because an incomplete record may not replace text") {
+                state.messages.size shouldBe 4
+                state.summary shouldBe null
+            }
+        }
+    }
+
+    given("a summarizer whose stream closed without a completion event") {
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(
+                Msg("user", "q1"), Msg("assistant", "a1"),
+                Msg("user", "q2"), Msg("assistant", "a2")
+            )
+        )
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { _, _ ->
+                Turn("a plausible summary", null, null, "stream_end_after_3 events")
+            }
+        )
+        `when`("compacting and keeping the last two turns") {
+            val result = compactor.compact(state, keepLast = 2) {}
+            then("it names the event that did arrive, since that is the only clue there is") {
+                result shouldBe
+                    CompactionOutcome.SummaryRefused("no response.completed, got stream_end_after_3 events")
+            }
+            then("nothing is cleared, because a chat turn forgives a missing terminal event and a fold may not") {
+                state.messages.size shouldBe 4
+                state.summary shouldBe null
+            }
+        }
+    }
+
+    given("a summarizer that answers with nothing but whitespace") {
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(
+                Msg("user", "q1"), Msg("assistant", "a1"),
+                Msg("user", "q2"), Msg("assistant", "a2")
+            )
+        )
+        val compactor = Compactor(
+            AppConfig(),
+            summarize = { _, _ -> Turn("   ", null, null, "response.completed") }
+        )
+        `when`("compacting and keeping the last two turns") {
+            val result = compactor.compact(state, keepLast = 2) {}
+            then("the refusal says the answer was empty, which is a different problem from a cut one") {
+                result shouldBe CompactionOutcome.SummaryRefused("empty")
+            }
+            then("nothing is cleared behind an empty record") {
+                state.messages.size shouldBe 4
+                state.summary shouldBe null
+            }
+        }
+    }
+
+    /**
+     * A refusal in the middle of a fold must not undo the batches already proved, and the outcome
+     * has to report the work that did land. This is the end-to-end version of the rule that a
+     * failed batch only stops the fold: the first summary stands, only its turns are cleared, and
+     * the refused batch is still there verbatim for the next attempt.
+     */
+    given("a fold whose first batch is accepted and whose second is refused") {
+        val state = SessionState(
+            "s", "m", null,
+            mutableListOf(Msg("user", "A".repeat(2_000)), Msg("assistant", "B".repeat(2_000)))
+        )
+        var calls = 0
+        val compactor = Compactor(
+            // A budget this small floors the ceiling at 4k characters, which is what splits these
+            // two turns into two batches instead of one.
+            AppConfig(contextBudgetTokens = 100),
+            summarize = { _, _ ->
+                calls++
+                if (calls == 1) Turn("first summary", null, null, "response.completed")
+                else Turn(
+                    "half a second summary", null, null, "response.incomplete",
+                    incompleteReason = "max_output_tokens"
+                )
+            }
+        )
+        `when`("compacting with nothing kept verbatim") {
+            val result = compactor.compact(state, keepLast = 0) {}
+            then("two batches were attempted, so this is a mid-fold refusal and not a blocked start") {
+                calls shouldBe 2
+            }
+            then("the work that landed is reported, and the refusal does not overwrite it") {
+                result shouldBe CompactionOutcome.Compacted("first summary")
+            }
+            then("only the proved batch is cleared and the refused turn is kept whole") {
+                state.summary shouldBe "first summary"
+                state.messages.size shouldBe 1
+                state.messages[0].content shouldBe "B".repeat(2_000)
+            }
+        }
+    }
+
+    given("a refusal to explain") {
+        `when`("naming why each answer was refused") {
+            then("an empty answer is reported as empty") {
+                Compactor.refusalReason(Turn("  ", null, null, "response.completed"), 2_048) shouldBe "empty"
+            }
+            then("a truncation carries the backend's own reason and the bound that cut it") {
+                Compactor.refusalReason(
+                    Turn(
+                        "partial", null, null, "response.incomplete",
+                        incompleteReason = "max_output_tokens"
+                    ),
+                    2_048
+                ) shouldBe "incomplete: max_output_tokens (2048)"
+            }
+            then("a missing completion event names whatever did arrive, and no bound it did not hit") {
+                Compactor.refusalReason(Turn("text", null, null, "response.failed"), 512) shouldBe
+                    "no response.completed, got response.failed"
+            }
+            then("a stream that closed silently says so, rather than naming an event that never came") {
+                Compactor.refusalReason(Turn("text", null, null, null), 2_048) shouldBe
+                    "no response.completed, got a stream that closed silently"
             }
         }
     }

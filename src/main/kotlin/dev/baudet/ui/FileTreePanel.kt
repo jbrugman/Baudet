@@ -629,8 +629,8 @@ class FileTreePanel(private val state: AppState) : JPanel(BorderLayout()) {
         const val CHANGES_HEIGHT = 200
 
         // GitHub-ish: additions green, deletions red, untracked a soft blue.
-        val COLOR_ADDED = Color(46, 160, 67)
-        val COLOR_DELETED = Color(210, 70, 70)
-        val COLOR_UNTRACKED = Color(130, 170, 220)
+        val COLOR_ADDED = BaudetPalette.gitAdded
+        val COLOR_DELETED = BaudetPalette.gitDeleted
+        val COLOR_UNTRACKED = BaudetPalette.gitUntracked
     }
 }

@@ -4,6 +4,7 @@ import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 
 /**
@@ -63,6 +64,86 @@ class GitCommandSpec : BehaviorSpec({
         }
     }
 
+    given("the guard when git writes are involved") {
+        `when`("writes are disabled, the default") {
+            then("a write verb is refused and steered to run_command") {
+                val reason = GitCommand.checkAllowed("commit", emptyList())
+                reason.shouldNotBeNull()
+                reason shouldContain "run_command"
+            }
+            then("the advertised set hides every write verb") {
+                GitCommand.advertised(false).contains("commit") shouldBe false
+                GitCommand.advertised(true).contains("commit") shouldBe true
+            }
+        }
+        `when`("add is asked with writes on") {
+            then("a path is allowed") {
+                GitCommand.checkAllowed("add", listOf("a.txt"), writesAllowed = true).shouldBeNull()
+            }
+            then("no path is refused, because git add with nothing does nothing useful") {
+                GitCommand.checkAllowed("add", emptyList(), writesAllowed = true).shouldNotBeNull()
+            }
+            then("a dash flag such as -A is refused") {
+                GitCommand.checkAllowed("add", listOf("-A"), writesAllowed = true).shouldNotBeNull()
+            }
+        }
+        `when`("commit is asked with writes on") {
+            then("a message makes it allowed") {
+                GitCommand.checkAllowed("commit", emptyList(), writesAllowed = true, message = "note")
+                    .shouldBeNull()
+            }
+            then("a blank or missing message is refused") {
+                GitCommand.checkAllowed("commit", emptyList(), writesAllowed = true).shouldNotBeNull()
+            }
+            then("an inline --amend smuggled into args is refused") {
+                GitCommand.checkAllowed("commit", listOf("--amend"), writesAllowed = true, message = "x")
+                    .shouldNotBeNull()
+            }
+        }
+        `when`("checkout is asked with writes on") {
+            then("switching to one branch is allowed") {
+                GitCommand.checkAllowed("checkout", listOf("main"), writesAllowed = true).shouldBeNull()
+            }
+            then("creating a branch with -b is allowed") {
+                GitCommand.checkAllowed("checkout", listOf("-b", "new"), writesAllowed = true).shouldBeNull()
+            }
+            then("a path discard through -- is refused") {
+                val r = GitCommand.checkAllowed("checkout", listOf("--", "a.txt"), writesAllowed = true)
+                r.shouldNotBeNull()
+                r shouldContain "discard"
+            }
+            then("more than one positional, which could detach HEAD, is refused") {
+                GitCommand.checkAllowed("checkout", listOf("a", "b"), writesAllowed = true).shouldNotBeNull()
+            }
+        }
+        `when`("stash is asked with writes on") {
+            then("a non-destructive subcommand is allowed") {
+                GitCommand.checkAllowed("stash", listOf("pop"), writesAllowed = true).shouldBeNull()
+            }
+            then("bare stash, which defaults to push, is allowed") {
+                GitCommand.checkAllowed("stash", emptyList(), writesAllowed = true).shouldBeNull()
+            }
+            then("the destructive drop is refused") {
+                val r = GitCommand.checkAllowed("stash", listOf("drop"), writesAllowed = true)
+                r.shouldNotBeNull()
+                r shouldContain "not allowed"
+            }
+        }
+        `when`("push is asked with writes on") {
+            then("a plain push is allowed") {
+                GitCommand.checkAllowed("push", emptyList(), writesAllowed = true).shouldBeNull()
+            }
+            then("a remote and a branch are allowed") {
+                GitCommand.checkAllowed("push", listOf("origin", "main"), writesAllowed = true).shouldBeNull()
+            }
+            then("a force flag is refused so a push can never be forced") {
+                val r = GitCommand.checkAllowed("push", listOf("--force"), writesAllowed = true)
+                r.shouldNotBeNull()
+                r shouldContain "cannot force"
+            }
+        }
+    }
+
     given("the argv builder for a cleared call") {
         `when`("status is requested against a root") {
             val argv = GitCommand.argv("/repo", "status", emptyList())
@@ -82,6 +163,21 @@ class GitCommandSpec : BehaviorSpec({
             then("they are appended after the verb flags, verbatim") {
                 GitCommand.argv("/repo", "show", listOf("HEAD"))
                     .takeLast(2) shouldContainExactly listOf("show", "HEAD")
+            }
+        }
+        `when`("a commit is built") {
+            then("the message rides as its own -m value") {
+                GitCommand.argv("/repo", "commit", emptyList(), message = "fix bug") shouldContainExactly listOf(
+                    "git", "-C", "/repo", "-c", "core.quotePath=false", "--no-pager",
+                    "commit", "-m", "fix bug"
+                )
+            }
+        }
+        `when`("an add is built against paths") {
+            then("an end-of-options separator guards the paths from being read as flags") {
+                GitCommand.argv("/repo", "add", listOf("a.txt")).takeLast(3) shouldContainExactly listOf(
+                    "add", "--", "a.txt"
+                )
             }
         }
     }
