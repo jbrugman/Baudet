@@ -24,9 +24,10 @@ class ResponsesClient(private val cfg: AppConfig) {
         tools: String? = null,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit = {},
-        token: CancellationToken = CancellationToken.NONE
+        token: CancellationToken = CancellationToken.NONE,
+        image: String? = null
     ): Turn = call(
-        buildRequest(system, history, userText, previousResponseId, tools), onDelta, onReasoning, token
+        buildRequest(system, history, userText, previousResponseId, tools, image), onDelta, onReasoning, token
     )
 
     /** One-off call that is not stored. Used by the compactor. */
@@ -50,7 +51,8 @@ class ResponsesClient(private val cfg: AppConfig) {
         history: List<Msg>,
         userText: String,
         previousResponseId: String?,
-        tools: String?
+        tools: String?,
+        image: String? = null
     ): JsonObject = buildJsonObject {
         put("model", cfg.model)
         if (system.isNotBlank()) put("instructions", system)
@@ -79,7 +81,23 @@ class ResponsesClient(private val cfg: AppConfig) {
                     if (m.role != "system") add(message(m.role, m.content))
                 }
             }
-            add(message("user", userText))
+            if (image == null) {
+                add(message("user", userText))
+            } else {
+                addJsonObject {
+                    put("role", "user")
+                    put("content", buildJsonArray {
+                        if (userText.isNotBlank()) addJsonObject {
+                            put("type", "input_text")
+                            put("text", userText)
+                        }
+                        addJsonObject {
+                            put("type", "input_image")
+                            put("image_url", image)
+                        }
+                    })
+                }
+            }
         })
     }
 

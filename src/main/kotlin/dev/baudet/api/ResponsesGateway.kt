@@ -20,8 +20,11 @@ class ResponsesGateway(cfg: AppConfig) : ModelGateway {
         tools: String?,
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
-        token: CancellationToken
-    ): Turn = client.turn(system, history, userText, previousResponseId, tools, onDelta, onReasoning, token)
+        token: CancellationToken,
+        image: String?
+    ): Turn = client.turn(
+        system, history, userText, previousResponseId, tools, onDelta, onReasoning, token, image
+    )
 
     override fun completeOnce(system: String, userText: String, maxTokens: Int, onDelta: (String) -> Unit): Turn =
         client.completeOnce(system, userText, maxTokens, onDelta)

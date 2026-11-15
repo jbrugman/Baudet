@@ -568,7 +568,8 @@ class AppState(val store: H2Store) {
     fun send(
         userText: String,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit = {}
+        onReasoning: (String) -> Unit = {},
+        image: String? = null
     ): Turn {
         if (!turnLock.compareAndSet(false, true)) {
             throw IllegalStateException("a turn is already running")
@@ -585,8 +586,8 @@ class AppState(val store: H2Store) {
         try {
             while (true) {
                 try {
-                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, token, onDelta, onReasoning)
-                    else runPlainTurn(s, shrinkPct, token, onDelta, onReasoning)
+                    val turn = if (toolsActive(s)) runToolTurn(s, shrinkPct, token, onDelta, onReasoning, image)
+                    else runPlainTurn(s, shrinkPct, token, onDelta, onReasoning, image)
                     persistTo(s)
                     return turn
                 } catch (e: BackendException) {
@@ -633,7 +634,8 @@ class AppState(val store: H2Store) {
         shrinkPct: Int,
         token: CancellationToken,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit
+        onReasoning: (String) -> Unit,
+        image: String?
     ): Turn {
         val prev = chainedPrev(s)
         // The prompt is the last stored message, so it is taken as the current input and only what
@@ -653,7 +655,8 @@ class AppState(val store: H2Store) {
                 previousResponseId = prev,
                 onDelta = onText,
                 onReasoning = onReasoning,
-                token = token
+                token = token,
+                image = image
             )
         } catch (e: Exception) {
             // A deliberate stop can surface as a closed-stream IOException rather than a clean cancellation,
@@ -687,7 +690,8 @@ class AppState(val store: H2Store) {
         shrinkPct: Int,
         token: CancellationToken,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit
+        onReasoning: (String) -> Unit,
+        image: String?
     ): Turn {
         val project = currentProject(s)
             ?: error("runToolTurn invoked without a gated project") // toolsActive() has gated this
@@ -742,6 +746,7 @@ class AppState(val store: H2Store) {
                 ctx = context,
                 onDelta = onText,
                 onReasoning = onReasoning,
+                image = image,
                 // Committed text already sits in the session, and a tool observation carries none,
                 // so clearing the buffer here leaves exactly the in-flight partial for a stop.
                 onMessage = { streamed.setLength(0); s.messages.add(it) }

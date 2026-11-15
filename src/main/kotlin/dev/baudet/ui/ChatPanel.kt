@@ -6,17 +6,21 @@ import dev.baudet.app.AppState
 import dev.baudet.app.ToolGate
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
+import dev.baudet.io.ImageClipboard
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Image
 import java.awt.Insets
 import java.awt.event.ActionEvent
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.image.BufferedImage
 import javax.swing.AbstractAction
 import javax.swing.BoxLayout
+import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -47,6 +51,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     companion object {
         private const val SEND_COMMAND = "baudet-send"
+        private const val PASTE_COMMAND = "baudet-paste-image"
 
         /** How far above the bottom still counts as resting at the tail, in pixels. */
         private const val TAIL_SLACK = 24
@@ -73,6 +78,14 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         addActionListener { stop() }
     }
     private val newSessionButton = JButton(Texts[Key.NewSessionButton]).apply { addActionListener { newSession() } }
+    /** The staged image as a data URL for the current turn only; it rides the request but is not stored. */
+    private var pendingImageDataUrl: String? = null
+    private val attachmentLabel = JLabel()
+    private val attachmentStrip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+        isVisible = false
+        add(attachmentLabel)
+        add(JButton(Texts[Key.ImageRemoveButton]).apply { addActionListener { clearPendingImage() } })
+    }
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
     /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
     private val toolWarning = JLabel().apply {
@@ -234,6 +247,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // the dock hands its rows back to the input without moving anything else around.
         val above = JPanel(BorderLayout())
         above.add(buttons, BorderLayout.NORTH)
+        above.add(attachmentStrip, BorderLayout.CENTER)
         above.add(thinkingHeader, BorderLayout.SOUTH)
         south.add(above, BorderLayout.NORTH)
         south.add(stack, BorderLayout.CENTER)
@@ -286,6 +300,18 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             SEND_COMMAND,
             object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent) = send()
+            }
+        )
+        // Paste rides a clipboard image onto the message when vision is on; otherwise it is a plain
+        // text paste, so the shortcut always does what the user expects on ctrl or cmd plus V.
+        val paste = KeyStroke.getKeyStroke("control V")
+        val cmdPaste = KeyStroke.getKeyStroke("meta V")
+        input.getInputMap(WHEN_FOCUSED).put(paste, PASTE_COMMAND)
+        input.getInputMap(WHEN_FOCUSED).put(cmdPaste, PASTE_COMMAND)
+        input.actionMap.put(
+            PASTE_COMMAND,
+            object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent) = pasteOrAttach()
             }
         )
     }
@@ -393,6 +419,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.foreground = Color(160, 160, 160)
         status.text = statusLine()
         updateToolWarning()
+        clearPendingImage()
     }
 
     /**
@@ -524,16 +551,16 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      */
     private fun send() {
         val text = input.text.trim()
-        if (text.isEmpty()) return
         if (busy) {
-            steer(text)
+            if (text.isNotEmpty()) steer(text)
             return
         }
+        if (text.isEmpty() && pendingImageDataUrl == null) return
         if (state.config.model.isBlank()) {
             fail(Texts[Key.PickModelFirst])
             return
         }
-        sendNow(text)
+        sendNow(text, pendingImageDataUrl)
     }
 
     /**
@@ -554,8 +581,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /** Run one turn: echo the prompt, then ask the backend on a worker thread. */
-    private fun sendNow(text: String) {
-        beginTurn(text)
+    private fun sendNow(text: String, image: String? = null) {
+        beginTurn(text, image)
 
         // A fresh renderer per turn scopes both the markdown stream and the dock to one
         // answer; callbacks fire on the worker thread, completion on the EDT.
@@ -570,7 +597,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                     SwingUtilities.invokeLater { overBudget(reason) }
                     return@Thread
                 }
-                val turn = state.send(text, render::delta, render::reasoning)
+                val turn = state.send(text, render::delta, render::reasoning, image)
                 SwingUtilities.invokeLater { finishTurn(turn) }
             } catch (e: Exception) {
                 // A Stop interrupts this worker; that is a deliberate stop, not a backend failure,
@@ -588,15 +615,18 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /** Take the busy lock and echo the prompt into the transcript before the reply. */
-    private fun beginTurn(text: String) {
+    private fun beginTurn(text: String, image: String? = null) {
         input.text = ""
         resetThinking()
         cancelled = false
         setBusy(true)
         status.text = Texts[Key.Streaming]
         append(Texts[Key.YouLabel], dim)
-        append(text + "\n\n")
+        append(text + "\n")
+        if (image != null) append(Texts[Key.ImageAttached], dim)
+        append("\n")
         append(Texts[Key.BaudetLabel], dim)
+        clearPendingImage()
     }
 
     /**
@@ -680,6 +710,44 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             // closed for its remainder, so closing the dock is never fought over.
             if (firstChunk) collapse(false) else applyDock()
         }
+    }
+
+    /**
+     * Handle ctrl or cmd plus V. When the clipboard holds an image it is staged for the next message;
+     * otherwise this falls back to a plain text paste so the shortcut always behaves as the user expects.
+     * The staged image rides the normal send path, so there is no separate button. Whether the backend
+     * accepts an image is the model's decision, not a setting in this app.
+     */
+    private fun pasteOrAttach() {
+        if (busy) {
+            input.paste()
+            return
+        }
+        val source = ImageClipboard.readImage()
+        if (source != null && source.width > 0 && source.height > 0) {
+            stageClipboardImage(source)
+            return
+        }
+        input.paste()
+    }
+
+    /** Stage a clipboard image for the next message; the data URL is shown but never stored. */
+    private fun stageClipboardImage(source: BufferedImage) {
+        pendingImageDataUrl = ImageClipboard.pngDataUrl(source)
+        val w = (48.0 * source.width / source.height).toInt().coerceAtLeast(1)
+        attachmentLabel.icon = ImageIcon(source.getScaledInstance(w, 48, Image.SCALE_SMOOTH))
+        attachmentStrip.isVisible = true
+        attachmentStrip.revalidate()
+        attachmentStrip.repaint()
+        status.foreground = Color(120, 200, 130)
+        status.text = Texts[Key.ImagePasted]
+    }
+
+    /** Drop the staged image; safe to call when there is none. */
+    private fun clearPendingImage() {
+        pendingImageDataUrl = null
+        attachmentLabel.icon = null
+        attachmentStrip.isVisible = false
     }
 
     private fun newSession() {

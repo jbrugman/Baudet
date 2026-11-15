@@ -47,7 +47,8 @@ class ToolLoop(
         ctx: ToolContext,
         onDelta: (String) -> Unit = {},
         onReasoning: (String) -> Unit = {},
-        onMessage: (Msg) -> Unit = {}
+        onMessage: (Msg) -> Unit = {},
+        image: String? = null
     ): LoopOutcome {
         this.onMessage = onMessage
         val msgs = history.toMutableList()
@@ -57,6 +58,8 @@ class ToolLoop(
         var prev = if (chainResponseId) previousResponseId else null
         val tools: String? = if (registry.isEmpty()) null else registry.definitions()
         var callSteps = 0
+        // An image rides only the first model request of the turn; later iterations replay text.
+        var pendingImage = image
 
         repeat(maxIterations.coerceAtLeast(1)) {
             if (contextCeiling > 0 && chainResponseId &&
@@ -67,7 +70,8 @@ class ToolLoop(
                     incompleteReason = "context_limit"
                 )
             }
-            val turn = turnSource.nextTurn(msgs.toList(), prev, tools, onDelta, onReasoning)
+            val turn = turnSource.nextTurn(msgs.toList(), prev, tools, onDelta, onReasoning, image = pendingImage)
+            pendingImage = null
             if (chainResponseId && turn.responseId != null) prev = turn.responseId
             addAssistant(msgs, added, turn)
             val calls = extractor.extract(turn)
@@ -97,7 +101,7 @@ class ToolLoop(
 
         // Budget spent while the model still wanted to act: give it one turn to answer in
         // prose so the user is not left without a reply; if it asks to act again, stop.
-        val settle = turnSource.nextTurn(msgs.toList(), prev, tools, onDelta, onReasoning)
+        val settle = turnSource.nextTurn(msgs.toList(), prev, tools, onDelta, onReasoning, image = pendingImage)
         if (chainResponseId && settle.responseId != null) prev = settle.responseId
         addAssistant(msgs, added, settle)
         if (extractor.extract(settle).isEmpty()) {

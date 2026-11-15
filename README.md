@@ -110,12 +110,16 @@ Working:
 - a file tree follows the selected project, colors each file by its git state (green
   changed, blue untracked, red deleted), opens a colored git patch on double-click, and
   refreshes itself when files change on disk
+- **Paste** (ctrl+V) stages the picture on the clipboard and the normal **Send** carries it
+  as an OpenAI image part, for a model that handles images
 - UI text in English, Dutch, French or German, switchable at runtime, English by default
 
 Not there yet:
 
 - no in-app editor: edits happen through the model, not a text buffer
 - git is read-only inspection — no commit, no checkpoints
+- attached images are first-pass only: the picture rides the first model request of a turn and
+  is not kept in the stored transcript, so it is not replayed on a steer follow-up or a reload
 - the GraalVM `native-image` profile is not wired up
 
 ## Stack
@@ -289,3 +293,13 @@ that turned out to be wrong and was corrected by the probe output.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Demo
+
+Screenshots of the running app (macOS, bundled runtime):
+
+![Baudet](Docs/Screenshots/screenshot_01.png)
+
+![Baudet](Docs/Screenshots/screenshot_02.png)
+
+![Baudet](Docs/Screenshots/screenshot_03.png)
