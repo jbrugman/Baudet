@@ -7,6 +7,7 @@ import dev.baudet.thread.CommandExecutionItem
 import dev.baudet.thread.ErrorItem
 import dev.baudet.thread.FileChangeItem
 import dev.baudet.thread.FileChangeKind
+import dev.baudet.thread.ImageItem
 import dev.baudet.thread.Item
 import dev.baudet.thread.ItemKind
 import dev.baudet.thread.ItemStatus
@@ -57,7 +58,8 @@ class ItemStoreSpec : BehaviorSpec({
             FileChangeItem("i5", "a.txt", FileChangeKind.Add, ItemStatus.Completed, "--- a\n+++ b\n@@\n+x\n", 1, 0),
             ToolCallItem("i6", "read_file", "a.txt", ItemStatus.Completed, ok = false, output = "denied"),
             PlanItem("i7", listOf(PlanEntry("step", PlanEntryStatus.Completed)), ItemStatus.Completed),
-            ErrorItem("i8", "the model stopped early")
+            ErrorItem("i8", "the model stopped early"),
+            ImageItem("i9", "mcp__qwen__generate", "image/png", "aGVsbG8=")
         )
         store.rewriteItems(id, rows)
         `when`("reading the rows back") {
@@ -111,7 +113,8 @@ class ItemStoreSpec : BehaviorSpec({
                     FileChangeItem("i", "a"),
                     ToolCallItem("i", "read_file"),
                     PlanItem("i"),
-                    ErrorItem("i", "boom")
+                    ErrorItem("i", "boom"),
+                    ImageItem("i", "generate", "image/png", "data")
                 )
                 rows.forEach { item ->
                     val tag = json.parseToJsonElement(json.encodeToString(Item.serializer(), item))

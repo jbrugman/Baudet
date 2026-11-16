@@ -60,7 +60,11 @@ private class Pending {
  * Lines the [Transport] may not carry: an empty line is tolerated, a non-object or one with a string
  * id is silently skipped rather than completing some unrelated request.
  */
-class McpJsonRpc(private val transport: Transport) {
+class McpJsonRpc(
+    private val transport: Transport,
+    /** How long one request may wait for its reply before the call fails; see [CALL_TIMEOUT_SECONDS]. */
+    private val callTimeoutSeconds: Long = CALL_TIMEOUT_SECONDS
+) {
 
     @Volatile private var running = true
     private var nextId = 0L
@@ -87,8 +91,8 @@ class McpJsonRpc(private val transport: Transport) {
                 if (params != null) put("params", params)
             }
             transport.writeLine(paramsText.toString())
-            if (!entry.latch.await(CALL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
-                throw McpRpcException(-32000, "no response to `$method` within ${CALL_TIMEOUT_SECONDS}s")
+            if (!entry.latch.await(callTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw McpRpcException(-32000, "no response to `$method` within ${callTimeoutSeconds}s")
             }
             entry.error?.let { throw it }
             return entry.result ?: throw McpRpcException(-32000, "empty response to `$method`")
@@ -149,7 +153,9 @@ class McpJsonRpc(private val transport: Transport) {
 
     companion object {
         /** A call may outlive a fast command (a remote build or fetch), but a stuck server must not
-         *  park the turn forever; this is the single ceiling on one round trip. */
+         *  park the turn forever; this is the default ceiling on one round trip. A server whose
+         *  [McpServerConfig.timeoutSeconds] raises it does so per line, because a local image model can
+         *  hold a single call open for minutes. */
         const val CALL_TIMEOUT_SECONDS = 120L
     }
 }

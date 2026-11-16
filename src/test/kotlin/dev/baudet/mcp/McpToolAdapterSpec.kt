@@ -1,9 +1,11 @@
 package dev.baudet.mcp
 
 import dev.baudet.tool.ToolContext
+import dev.baudet.tool.ToolImage
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -115,19 +117,49 @@ class McpToolAdapterSpec : BehaviorSpec({
         client.close()
     }
 
-    given("a result carrying a non-text part") {
+    given("a result carrying a part the model cannot read at all") {
         val mixed = buildJsonObject {
             put("content", buildJsonArray {
-                add(buildJsonObject { put("type", "text"); put("text", "see the image") })
-                add(buildJsonObject { put("type", "image"); put("data", "...") })
+                add(buildJsonObject { put("type", "text"); put("text", "see the resource") })
+                add(buildJsonObject { put("type", "resource"); put("resource", "...") })
             })
         }
         val (adapter, _, client) = wired(mixed)
         `when`("it executes") {
             val r = adapter.execute(buildJsonObject { }, ctx(setOf("srv")) { _, _, _ -> true })
-            then("the text is kept and the hidden part is counted, never dropped silently") {
-                r.output shouldContain "see the image"
+            then("the text is kept and the unreadable part is counted, never dropped silently") {
+                r.output shouldContain "see the resource"
                 r.output shouldContain "1 non-text part(s) not shown here"
+                r.images shouldBe emptyList()
+            }
+        }
+        client.close()
+    }
+
+    given("a result carrying only an image part") {
+        val (adapter, _, client) = wired(mcpImageResult("aGVsbG8=", mimeType = "image/png"))
+        `when`("it executes") {
+            val r = adapter.execute(buildJsonObject { }, ctx(setOf("srv")) { _, _, _ -> true })
+            then("the bytes go to images with their mime type, and never into the model-facing output") {
+                r.ok shouldBe true
+                r.images shouldBe listOf(ToolImage("image/png", "aGVsbG8="))
+                r.output shouldNotContain "aGVsbG8="
+                r.output shouldContain "1 image(s) returned"
+            }
+        }
+        client.close()
+    }
+
+    given("a result carrying a text part and an image part") {
+        val (adapter, _, client) = wired(mcpTextThenImageResult("here it is", "aGk="))
+        `when`("it executes") {
+            val r = adapter.execute(buildJsonObject { }, ctx(setOf("srv")) { _, _, _ -> true })
+            then("the text reads to the model, the image rides along in images only") {
+                r.ok shouldBe true
+                r.output shouldContain "here it is"
+                r.output shouldContain "1 image(s) returned"
+                r.output shouldNotContain "aGk="
+                r.images shouldBe listOf(ToolImage("image/png", "aGk="))
             }
         }
         client.close()

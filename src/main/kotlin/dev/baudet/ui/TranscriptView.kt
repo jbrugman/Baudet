@@ -11,6 +11,7 @@ import dev.baudet.thread.ApprovalResolved
 import dev.baudet.thread.CommandExecutionItem
 import dev.baudet.thread.ErrorItem
 import dev.baudet.thread.FileChangeItem
+import dev.baudet.thread.ImageItem
 import dev.baudet.thread.Item
 import dev.baudet.thread.ItemCompleted
 import dev.baudet.thread.ItemDelta
@@ -28,12 +29,18 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Image
 import java.awt.Insets
 import java.awt.Rectangle
+import java.io.ByteArrayInputStream
+import java.util.Base64
+import javax.imageio.ImageIO
 import javax.swing.BorderFactory
+import javax.swing.ImageIcon
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JFileChooser
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -204,6 +211,9 @@ class TranscriptView : JPanel(BorderLayout()) {
 
         private const val COLLAPSE_ARROW = "\u25b8"
         private const val EXPAND_ARROW = "\u25be"
+
+        /** Widest an inline tool image is drawn, in pixels. Never upscaled past this. */
+        private const val MAX_IMAGE_WIDTH = 640
     }
 
     /**
@@ -320,6 +330,7 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
     private val dim = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.dim) }
     private val error = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.error) }
+    private val warn = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.warn) }
     private val bold = SimpleAttributeSet(normal).apply { StyleConstants.setBold(this, true) }
     private val italic = SimpleAttributeSet(normal).apply { StyleConstants.setItalic(this, true) }
     private val heading = SimpleAttributeSet(bold).apply { StyleConstants.setFontSize(this, 15) }
@@ -494,6 +505,8 @@ class TranscriptView : JPanel(BorderLayout()) {
             is CommandExecutionItem -> put(item.itemId, CommandRow(item))
             is FileChangeItem -> put(item.itemId, ChangeRow(item))
             is ToolCallItem -> put(item.itemId, ToolRow(item))
+            // An image is complete the moment it arrives (bytes, not a stream): a one-shot row.
+            is ImageItem -> addRow(imageRow(item))
             is PlanItem -> put(item.itemId, PlanRow(item))
             is ErrorItem -> put(item.itemId, errorRow(item.message))
             // Reasoning has a dock of its own above the composer; it is not a row on purpose.
@@ -518,8 +531,9 @@ class TranscriptView : JPanel(BorderLayout()) {
             is FileChangeItem -> close(item.itemId)?.let { (it as ChangeRow).finish(item) }
             is ToolCallItem -> close(item.itemId)?.let { (it as ToolRow).finish(item) }
             is PlanItem -> close(item.itemId)?.let { (it as PlanRow).finish(item) }
-            // A prompt row is complete as it is written, and an error row carries its one message.
-            is UserMessageItem, is ErrorItem -> Unit
+            // A prompt row is complete as it is written, an error row carries its one message, and
+            // an image row is already whole from the moment [started] added it.
+            is UserMessageItem, is ErrorItem, is ImageItem -> Unit
             is ReasoningItem -> Unit
         }
     }
@@ -608,6 +622,85 @@ class TranscriptView : JPanel(BorderLayout()) {
         write(body.styledDocument as DefaultStyledDocument, text + "\n", dim)
     }
 
+    /**
+     * A picture a tool returned, shown inline the way the app-server shows a returned image. It is
+     * scaled down to [MAX_IMAGE_WIDTH] but never up: upscaling invents pixels the tool never made,
+     * and honest accounting is the reason this app exists. A picture whose bytes will not decode
+     * degrades to a caption naming why rather than throwing, so one bad frame cannot take the
+     * transcript down -- and it says "unreadable" rather than drawing nothing in silence.
+     */
+    private fun imageRow(item: ImageItem): Row = Row(card = true).apply {
+        val caption = textPane()
+        write(caption.styledDocument as DefaultStyledDocument,
+            Texts.fmt(Key.ImageGenerated, item.tool) + "\n", dim)
+        add(caption, BorderLayout.NORTH)
+        // The exact bytes the tool returned are decoded once and kept: the same array feeds both the
+        // preview and the save, so what lands on disk is what the server sent, never a re-encode.
+        val rawBytes = runCatching { Base64.getDecoder().decode(item.base64) }.getOrNull()
+        val decoded = rawBytes?.let { runCatching { ImageIO.read(ByteArrayInputStream(it)) }.getOrNull() }
+        if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
+            val note = textPane()
+            write(note.styledDocument as DefaultStyledDocument, Texts[Key.ImageUnreadable] + "\n", error)
+            add(note, BorderLayout.CENTER)
+        } else {
+            val w: Int
+            val h: Int
+            if (decoded.width > MAX_IMAGE_WIDTH) {
+                w = MAX_IMAGE_WIDTH
+                h = (MAX_IMAGE_WIDTH.toDouble() * decoded.height / decoded.width).toInt().coerceAtLeast(1)
+            } else {
+                w = decoded.width
+                h = decoded.height
+            }
+            // Left-aligned, never centered: in scroll mode (wrap off) the card can sit inside a wider
+            // view, and a centered picture would drift away from the caption and the text above it.
+            val pic = JLabel(ImageIcon(decoded.getScaledInstance(w, h, Image.SCALE_SMOOTH)))
+            pic.horizontalAlignment = SwingConstants.LEFT
+            add(pic, BorderLayout.CENTER)
+            rawBytes?.let { add(imageSaveBar(item, it, caption), BorderLayout.SOUTH) }
+        }
+    }
+
+    /** The save strip under a returned image: one button, writing the original bytes where the human picks. */
+    private fun imageSaveBar(item: ImageItem, rawBytes: ByteArray, caption: JTextPane): JPanel =
+        JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+            isOpaque = false
+            add(JButton(Texts[Key.SaveImage]).apply {
+                font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                addActionListener { saveImage(item, rawBytes, caption) }
+            })
+        }
+
+    /**
+     * Write the decoded bytes to a file the human chooses, then report the outcome on the caption:
+     * a faint line naming where it went, or an honest failure rather than silence. An overwrite is the
+     * chooser's to confirm, never ours to assume.
+     */
+    private fun saveImage(item: ImageItem, rawBytes: ByteArray, caption: JTextPane) {
+        val chooser = JFileChooser().apply {
+            dialogTitle = Texts[Key.SaveImage]
+            selectedFile = java.io.File(defaultImageName(item.mimeType))
+        }
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return
+        val target = chooser.selectedFile
+        val saved = runCatching { java.nio.file.Files.write(target.toPath(), rawBytes) }
+        val doc = caption.styledDocument as DefaultStyledDocument
+        if (saved.isSuccess)
+            write(doc, " " + Texts.fmt(Key.ImageSavedTo, target.absolutePath) + "\n", dim)
+        else
+            write(doc, " " + Texts[Key.ImageSaveFailed] + "\n", error)
+    }
+
+    /** A safe default file name for a returned image, with the extension its MIME type implies. */
+    private fun defaultImageName(mimeType: String): String {
+        val subtype = mimeType.substringAfter('/', "")
+        val ext = when (subtype) {
+            "", "jpeg", "pjpeg" -> if (subtype == "") "png" else "jpg"
+            else -> subtype
+        }
+        return "baudet-image-${System.currentTimeMillis()}.$ext"
+    }
+
     private fun errorRow(text: String): Row = Row().apply {
         val body = textPane()
         add(body, BorderLayout.CENTER)
@@ -656,26 +749,30 @@ class TranscriptView : JPanel(BorderLayout()) {
                 Key.DenyButton to ApprovalDecision.Decline
             )
         }
-        return JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+        // The prompt and the buttons must both stay reachable at any width. A single FlowLayout put a
+        // long MCP heading and the three buttons on one line, and a Row caps itself to one line of
+        // height, so the wrapped buttons fell off the right edge and could not be clicked -- the human
+        // saw only the first. The prompt therefore wraps through the same textPane the bodies use, and
+        // the buttons keep their own line below it, so Allow / Always / Deny are all within reach.
+        return JPanel(BorderLayout()).apply {
             isOpaque = false
             // A command and a patch already name themselves in their row; an MCP tool does not, so its
             // card says which server and tool it is before the human decides.
-            if (request is ApprovalRequest.McpTool) {
-                add(JLabel(Texts.fmt(Key.ApprovalMcpHeading, request.serverId, request.tool)).apply {
-                    foreground = BaudetPalette.warn
-                    font = Font(Font.MONOSPACED, Font.PLAIN, 11)
-                })
-            }
-            add(JLabel(Texts[Key.ApprovalWaiting]).apply {
-                foreground = BaudetPalette.warn
-                font = Font(Font.MONOSPACED, Font.PLAIN, 11)
-            })
-            choices.forEach { (key, decision) ->
-                add(JButton(Texts[key]).apply {
-                    font = Font(Font.MONOSPACED, Font.PLAIN, 11)
-                    addActionListener { onApproval(itemId, decision) }
-                })
-            }
+            val prompt = textPane()
+            if (request is ApprovalRequest.McpTool)
+                write(prompt.styledDocument as DefaultStyledDocument,
+                    Texts.fmt(Key.ApprovalMcpHeading, request.serverId, request.tool) + " ", warn)
+            write(prompt.styledDocument as DefaultStyledDocument, Texts[Key.ApprovalWaiting] + "\n", warn)
+            add(prompt, BorderLayout.NORTH)
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+                isOpaque = false
+                choices.forEach { (key, decision) ->
+                    add(JButton(Texts[key]).apply {
+                        font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                        addActionListener { onApproval(itemId, decision) }
+                    })
+                }
+            }, BorderLayout.SOUTH)
         }
     }
 

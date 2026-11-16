@@ -185,6 +185,15 @@ class ThreadEmitter(
         completed(open.copy(status = if (ok) ItemStatus.Completed else ItemStatus.Failed, ok = ok, output = output))
     }
 
+    override fun imageCompleted(tool: String, mimeType: String, base64: String) {
+        // An image is a one-shot row: there is nothing to stream into it, so it starts and finishes
+        // in one beat, like the prompt row. It does not touch the open agent/command/change/tool,
+        // because the picture belongs to the tool that produced it, already closed above.
+        val item = ImageItem(nextId(), tool, mimeType, base64)
+        started(item)
+        completed(item)
+    }
+
     override fun interrupted() {
         closeReasoning()
         agent?.let { if (agentAnnounced) completed(it.copy(status = ItemStatus.Interrupted)) }

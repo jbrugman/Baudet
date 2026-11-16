@@ -52,7 +52,8 @@ class McpClient(
             return false
         }
         transport = t
-        val client = McpJsonRpc(t)
+        val timeout = if (config.timeoutSeconds > 0) config.timeoutSeconds else McpJsonRpc.CALL_TIMEOUT_SECONDS
+        val client = McpJsonRpc(t, timeout)
         try {
             client.request(
                 "initialize",

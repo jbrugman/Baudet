@@ -704,6 +704,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             // overflow gets, so the user knows the way out rather than a bare reason token.
             val label = when {
                 reason == "context_limit" -> Texts[Key.ContextOverflow]
+                reason == "empty" -> Texts[Key.EmptyTurn]
                 reason != null -> Texts.fmt(Key.Truncated, reason)
                 else -> Texts[Key.TruncatedUnknown]
             }

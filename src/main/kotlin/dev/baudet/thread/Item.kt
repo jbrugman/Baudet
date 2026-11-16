@@ -39,7 +39,8 @@ enum class ItemKind(val wireName: String) {
     @SerialName("fileChange") FileChange("fileChange"),
     @SerialName("plan") Plan("plan"),
     @SerialName("error") Error("error"),
-    @SerialName("baudet/toolCall") ToolCall("baudet/toolCall")
+    @SerialName("baudet/toolCall") ToolCall("baudet/toolCall"),
+    @SerialName("baudet/image") Image("baudet/image")
 }
 
 /**
@@ -188,6 +189,25 @@ data class ToolCallItem(
     val output: String = ""
 ) : Item() {
     override val kind: ItemKind get() = ItemKind.ToolCall
+}
+
+/**
+ * An image a tool produced, shown inline the way the app-server shows a returned image. The
+ * bytes live here and nowhere else: [base64] is never folded into a model-facing observation, so
+ * a transcript that carries a picture does not spend the context window on it. Named as ours with
+ * the `baudet/` prefix like [ToolCallItem], because the app-server has no item tag for a tool's
+ * image yet -- dressing it in a Codex tag would make the seam lie about what the wire would carry.
+ */
+@Serializable
+@SerialName("baudet/image")
+data class ImageItem(
+    override val itemId: String,
+    val tool: String,
+    val mimeType: String,
+    val base64: String,
+    override val status: ItemStatus = ItemStatus.Completed
+) : Item() {
+    override val kind: ItemKind get() = ItemKind.Image
 }
 
 /** The plan checklist. Reserved: nothing emits one until Baudet has a plan tool. */

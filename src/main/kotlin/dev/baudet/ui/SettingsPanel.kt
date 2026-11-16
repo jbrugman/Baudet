@@ -67,7 +67,6 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         font = Font(Font.MONOSPACED, Font.PLAIN, 11)
     }
     private val mcpAllowArea = JTextArea(3, 34).apply {
-        isEditable = false
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
     }
 
@@ -317,9 +316,19 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun applyMcp() {
         val lines = mcpArea.text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         val dropped = state.replaceMcpServers(lines)
+        // The always-allowed ids are editable now, so Apply takes them too: the user no longer has to
+        // catch the "always" button on a live card to pin a server. Ids matching no server are dropped.
+        val allowDropped = state.replaceMcpAllowServers(
+            mcpAllowArea.text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        )
         reloadMcp()
-        status.foreground = if (dropped == 0) Color(120, 200, 130) else Color(230, 180, 100)
-        status.text = Texts.fmt(Key.McpDropped, dropped)
+        val droppedAny = dropped > 0 || allowDropped > 0
+        status.foreground = if (droppedAny) Color(230, 180, 100) else Color(120, 200, 130)
+        status.text = when {
+            dropped > 0 -> Texts.fmt(Key.McpDropped, dropped)
+            allowDropped > 0 -> Texts.fmt(Key.McpAllowApplied, allowDropped)
+            else -> Texts.fmt(Key.McpDropped, 0)
+        }
     }
 
     private fun clearMcpAllow() {

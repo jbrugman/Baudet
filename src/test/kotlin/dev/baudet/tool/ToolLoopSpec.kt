@@ -272,4 +272,55 @@ class ToolLoopSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a reasoning model that parks a turn in its reasoning channel") {
+        // The reported bug: a turn that puts everything in reasoning leaves the answer channel
+        // blank with no call, which used to read as a final answer and did nothing -- the user had
+        // to nudge. The loop now retries a blank turn, so a model that would have acted still does.
+        val source = Scripted(listOf(turn("", "r1"), turn(callText("noop"), "r2"), turn("all done", "r3")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("the first turn comes back blank") {
+            val outcome = loop.run(seed("generate an image"), ctx = ctx)
+            then("the blank turn is retried and the call still runs to an answer") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                (outcome as LoopOutcome.Completed).finalText shouldBe "all done"
+            }
+            then("the blank reply left no empty assistant message on record") {
+                outcome.messages.map { it.role } shouldBe listOf("assistant", "user", "assistant")
+                outcome.messages.all { it.content.isNotBlank() } shouldBe true
+            }
+            then("the loop really asked the model again before acting") {
+                (source.seen.size >= 2) shouldBe true
+            }
+        }
+    }
+
+    given("a model that stays blank turn after turn") {
+        // The retry must be bounded: a model that never produces content cannot spin the loop. It
+        // ends blank after the small ceiling, and the blank reply itself is what reaches the caller.
+        val source = Scripted(listOf(turn("", "r1")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("every turn is blank") {
+            val outcome = loop.run(seed("go"), ctx = ctx)
+            then("it stops as Completed but blank, after a bounded number of asks") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                (outcome as LoopOutcome.Completed).finalText.isBlank() shouldBe true
+                source.seen.size shouldBe 3
+            }
+        }
+    }
+
+    given("a blank turn followed by a plain answer") {
+        val source = Scripted(listOf(turn("", "r1"), turn("all done", "r2")))
+        val loop = ToolLoop(source, registry, extractor, maxIterations = 4)
+        `when`("running") {
+            val outcome = loop.run(seed("go"), ctx = ctx)
+            then("the blank turn is retried and then the real answer lands") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                (outcome as LoopOutcome.Completed).finalText shouldBe "all done"
+                outcome.messages.map { it.role } shouldBe listOf("assistant")
+                source.seen.size shouldBe 2
+            }
+        }
+    }
 })

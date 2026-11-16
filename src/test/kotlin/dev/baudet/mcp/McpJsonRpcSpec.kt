@@ -98,4 +98,30 @@ class McpJsonRpcSpec : BehaviorSpec({
         }
         t.close()
     }
+
+    given("a peer that never answers and never closes") {
+        // The reader blocks forever -- a server that accepts a call and hangs -- so only the per-call
+        // ceiling can free the turn. A reader parked on a gate models that without raw-pipe cross-thread
+        // quirks; close() opens the gate so the parked reader wakes, throws and exits instead of lingering,
+        // and it skips the base pipe close because BufferedReader still holds its read lock during read.
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val peer = object : java.io.Reader() {
+            override fun read(cbuf: CharArray, off: Int, len: Int): Int {
+                gate.await()
+                throw java.io.EOFException("blocked peer")
+            }
+            override fun close() = gate.countDown()
+        }
+        val t = object : Transport(peer, java.io.StringWriter()) {
+            override fun close() { gate.countDown() } // in-memory transport: waking the reader is all it takes
+        }
+        val rpc = McpJsonRpc(t, callTimeoutSeconds = 1)
+        `when`("a request is sent") {
+            val e = shouldThrow<McpRpcException> { rpc.request("probe") }
+            then("it fails on the configured ceiling rather than blocking forever") {
+                e.message shouldBe "no response to `probe` within 1s"
+            }
+        }
+        rpc.close()
+    }
 })

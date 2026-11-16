@@ -170,6 +170,32 @@ fun mcpTextResult(vararg parts: String): JsonObject = buildJsonObject {
     })
 }
 
+/** A `tools/call` result whose content is one image part, as a vision/image tool would emit. */
+fun mcpImageResult(data: String, mimeType: String = "image/png"): JsonObject = buildJsonObject {
+    put("content", kotlinx.serialization.json.buildJsonArray {
+        add(buildJsonObject {
+            put("type", "image")
+            put("mimeType", mimeType)
+            put("data", data)
+        })
+    })
+}
+
+/** A `tools/call` result carrying a text part followed by an image part. */
+fun mcpTextThenImageResult(text: String, data: String, mimeType: String = "image/png"): JsonObject = buildJsonObject {
+    put("content", kotlinx.serialization.json.buildJsonArray {
+        add(buildJsonObject {
+            put("type", "text")
+            put("text", text)
+        })
+        add(buildJsonObject {
+            put("type", "image")
+            put("mimeType", mimeType)
+            put("data", data)
+        })
+    })
+}
+
 /** A `tools/call` result flagged as a tool-level error (isError), with one text part. */
 fun mcpErrorResult(text: String): JsonObject = buildJsonObject {
     put("isError", true)

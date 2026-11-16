@@ -486,6 +486,33 @@ class AppState(val store: H2Store) {
     }
 
     /**
+     * Replace the always-allowed MCP server ids with the ones typed in Settings, so a grant no longer
+     * depends on catching the "always" button on a live card. Each non-blank line is one id; an id that
+     * names no configured server is dropped rather than trusted -- a grant that could never match is
+     * dead weight at best -- and the count is reported so the panel can say so. Duplicates collapse.
+     * Stored by id under the same lock [allowedMcpServers] reads on every call, so a new grant counts
+     * on the turn now running. Persists with [H2Store.save] alone, like [allowMcpServerAlways].
+     */
+    fun replaceMcpAllowServers(lines: List<String>): Int {
+        val configured = synchronized(config.mcpServers) { config.mcpServers.map { it.id }.toSet() }
+        val next = LinkedHashSet<String>()
+        var dropped = 0
+        for (raw in lines) {
+            val id = raw.trim()
+            if (id.isEmpty()) continue
+            if (id in configured) next.add(id) else dropped++
+        }
+        var changed = false
+        synchronized(config.mcpAllowServers) {
+            if (config.mcpAllowServers.toSet() != next.toSet()) {
+                config.mcpAllowServers.clear(); config.mcpAllowServers.addAll(next); changed = true
+            }
+        }
+        if (changed) store.save(config)
+        return dropped
+    }
+
+    /**
      * Replace the MCP servers with the configs parsed from the given lines, each a single JSON object. A
      * line that will not parse, names no id or command, or repeats an id already taken is dropped rather
      * than trusted; order is kept. Nothing launches or stops here -- [McpServers] reconciles the live set
@@ -1003,9 +1030,14 @@ class AppState(val store: H2Store) {
         if (outcome.responseId != null) s.previousResponseId = outcome.responseId
         return when (outcome) {
             is LoopOutcome.Completed ->
-                if (outcome.capReached && outcome.finalTurn.incompleteReason == null)
-                    outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
-                else outcome.finalTurn
+                when {
+                    outcome.finalTurn.incompleteReason != null -> outcome.finalTurn
+                    outcome.capReached -> outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
+                    // A turn that reasoned and then answered with nothing, after the loop's own
+                    // blank retries: flag it so the UI says so instead of silent status counts.
+                    outcome.finalTurn.text.isBlank() -> outcome.finalTurn.copy(incompleteReason = "empty")
+                    else -> outcome.finalTurn
+                }
             is LoopOutcome.CapReached -> Turn(
                 text = "",
                 responseId = outcome.responseId,

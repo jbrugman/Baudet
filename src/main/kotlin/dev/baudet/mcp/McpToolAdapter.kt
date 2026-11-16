@@ -4,6 +4,7 @@ import dev.baudet.api.arr
 import dev.baudet.api.str
 import dev.baudet.tool.Tool
 import dev.baudet.tool.ToolContext
+import dev.baudet.tool.ToolImage
 import dev.baudet.tool.ToolResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -59,13 +60,24 @@ class McpToolAdapter(
             output = if (isError) "the MCP tool reported an error" else "(no output)"
         )
         val text = StringBuilder()
+        val images = mutableListOf<ToolImage>()
         var nonText = 0
         for (element in parts) {
             val part = element as? JsonObject ?: continue
             when (part.str("type")) {
                 "text" -> part.str("text")?.let { if (text.isNotEmpty()) text.append('\n'); text.append(it) }
+                // An image part goes to the transcript row, not to the model. The bytes must never
+                // reach output; the model only learns that a picture came back, in prose.
+                "image" -> {
+                    val data = part.str("data")
+                    if (!data.isNullOrEmpty()) images += ToolImage(part.str("mimeType").orEmpty(), data)
+                }
                 else -> nonText++
             }
+        }
+        if (images.isNotEmpty()) {
+            if (text.isNotEmpty()) text.append('\n')
+            text.append("(${images.size} image(s) returned; shown to the user)")
         }
         if (nonText > 0) {
             if (text.isNotEmpty()) text.append('\n')
@@ -74,7 +86,8 @@ class McpToolAdapter(
         return ToolResult(
             ok = !isError,
             output = if (text.isEmpty()) (if (isError) "the MCP tool reported an error" else "(no output)")
-            else text.toString()
+            else text.toString(),
+            images = images
         )
     }
 

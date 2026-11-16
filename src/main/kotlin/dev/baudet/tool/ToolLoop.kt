@@ -35,6 +35,14 @@ import kotlinx.serialization.json.contentOrNull
  */
 private const val MAX_PARALLEL_TOOL_CALLS = 2
 
+/**
+ * Small ceiling on consecutive blank, call-less turns. A reasoning model that parks its whole
+ * answer in the reasoning channel and emits nothing on the answer channel is not done; one more
+ * request is what moves it, which is exactly what a manual nudge did. Bounded so a model that
+ * stays blank forever cannot spin the loop in place of answering.
+ */
+private const val MAX_BLANK_TURNS = 2
+
 class ToolLoop(
     private val turnSource: TurnSource,
     private val registry: ToolRegistry,
@@ -84,6 +92,7 @@ class ToolLoop(
         var prev = if (chainResponseId) previousResponseId else null
         val tools: String? = if (registry.isEmpty()) null else registry.definitions()
         var callSteps = 0
+        var blanks = 0
         // An image rides only the first model request of the turn; later iterations replay text.
         var pendingImage = image
 
@@ -101,10 +110,21 @@ class ToolLoop(
             pendingImage = null
             sink.replyCompleted(turn.text)
             if (chainResponseId && turn.responseId != null) prev = turn.responseId
-            addAssistant(msgs, added, turn)
             val calls = extractor.extract(turn)
 
             if (calls.isEmpty()) {
+                // A reasoning model can spend a whole turn in its reasoning channel and leave the
+                // answer channel blank, with no call extracted. That is not a final answer: the only
+                // thing that ever moved it was another request, which is what a manual nudge did. So
+                // a blank, call-less turn is retried -- without persisting the empty reply -- up to a
+                // small bound, because under a server session the reasoning already lives server-side
+                // and the next request continues it. Past the bound it ends as before; the caller
+                // flags the empty turn, so a run is never silently a no-op again.
+                if (turn.text.isBlank() && blanks < MAX_BLANK_TURNS) {
+                    blanks++
+                    return@repeat
+                }
+                addAssistant(msgs, added, turn)
                 steps.add(ToolStep(turn.text, emptyList(), emptyList()))
                 return LoopOutcome.Completed(
                     finalText = turn.text,
@@ -117,6 +137,7 @@ class ToolLoop(
                 )
             }
 
+            addAssistant(msgs, added, turn)
             val results = runCalls(calls, ctx, msgs, added, undos, sink)
             steps.add(ToolStep(turn.text, calls, results))
             callSteps++
@@ -255,7 +276,12 @@ class ToolLoop(
                 ok = result.ok
             )
 
-            else -> sink.toolCallCompleted(result.ok, result.output)
+            else -> {
+                sink.toolCallCompleted(result.ok, result.output)
+                // A tool that returned a picture gets a row of its own after its one-line result, so
+                // the image shows inline. The bytes stay off the model channel: only output went there.
+                result.images.forEach { sink.imageCompleted(call.tool, it.mimeType, it.base64) }
+            }
         }
     }
 

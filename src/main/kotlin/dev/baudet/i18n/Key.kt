@@ -48,6 +48,7 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
     LastEvent("last={0}", "eind={0}", "dernier={0}", "letztes={0}"),
     Truncated("TRUNCATED ({0})", "AFGEBROKEN ({0})", "TRONQUÉ ({0})", "ABGESCHNITTEN ({0})"),
     TruncatedUnknown("TRUNCATED (no reason reported)", "AFGEBROKEN (reden niet gemeld)", "TRONQUÉ (aucune raison signalée)", "ABGESCHNITTEN (kein Grund gemeldet)"),
+    EmptyTurn("the model returned an empty turn: it stopped after reasoning without an answer or a tool call. Send another message to nudge it, or pick a model that answers.", "het model gaf een lege beurt: het stopte na zijn redenering zonder antwoord of tool-aanroep. Stuur nog een bericht om het voort te duwen, of kies een model dat wel antwoordt.", "le modèle a renvoyé un tour vide : il s'est arrêté après son raisonnement, sans réponse ni appel d'outil. Envoyez un autre message pour le relancer, ou choisissez un modèle qui répond.", "das Modell lieferte eine leere Runde: es stoppte nach dem Reasoning ohne Antwort oder Tool-Aufruf. Senden Sie eine weitere Nachricht, um es anzustoßen, oder wählen Sie ein Modell, das antwortet."),
     TurnFailed("turn failed", "beurt mislukt", "échec du tour", "Runde fehlgeschlagen"),
     NewSessionStatus("new session {0}", "nieuwe sessie {0}", "nouvelle session {0}", "neue Sitzung {0}"),
     TooFewTurns("too few turns to compact", "te weinig beurten om te compacten", "trop peu de tours à compresser", "zu wenige Runden zum Kompaktieren"),
@@ -430,6 +431,8 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "**Baudet** est un assistant de bureau local-first, conçu pour discuter avec de grands modèles de langage locaux (servis via des API comme [oMLX](https://github.com/jundot/omlx)), sans langue de bois.\n\nEn français, un *baudet* est un âne - la bête de somme par excellence. Là où les clients pour modèles frontière tiennent pour acquis des tokens bon marché, d'énormes contextes et des appels d'outils parfaits, **Baudet** est conçu pour la réalité du matériel local. Il traite votre modèle local comme un âne travailleur : très capable et appliqué, mais ayant besoin du harnais adapté pour rester efficace, transparent et honnête.\n\nLe nom est une blague interne à plusieurs couches et une métaphore de travail pour les développeurs d'IA locale :\n- **Le son de l'IA** : en français, l'intelligence artificielle s'abrége **IA** (prononcé *ii-ya*). Fait troublant, *IA* - écrit *Hi-Han* - est l'onomatopée du cri de l'âne.\n- **La bête de somme** : les modèles locaux font le travail lourd sur votre propre machine. Baudet gère les sessions côté serveur, suit les métriques de tokens et assure la compression côté client, pour rendre l'inférence locale pratique au quotidien.\n- **Dompter l'âne têtu** : les backends locaux sont imprévisibles - ils dévient des noms d'événements, inventent des budgets ou brûlent la fenêtre de contexte en raisonnements avant toute réponse. Comme un meneur expérimenté qui harnache un âne malin mais têtu, Baudet impose un comptage honnête des tokens, isole les tokens de raisonnement et absorbe les bizarreries d'analyse sans planter.\n\nEn abandonnant les réflexes cloud-first et en affichant une télémétrie réelle, Baudet vous permet, à vous et à votre modèle local, d'affronter ensemble de lourdes charges de travail.",
         "**Baudet** ist ein local-first Desktop-Assistent, entwickelt, um mit lokalen großen Sprachmodellen zu sprechen (bereitgestellt über APIs wie [oMLX](https://github.com/jundot/omlx)), ohne Schönfärberei.\n\nAuf Französisch ist ein *baudet* ein Esel - das Lasttier schlechthin. Wo Clients für Frontier-Modelle günstige Tokens, riesige Kontexte und fehlerfreie Tool-Aufrufe voraussetzen, ist **Baudet** für die Realität lokaler Hardware gebaut. Es behandelt dein lokales Modell wie einen arbeitsamen Esel: sehr leistungsfähig und fleißig, aber auf das richtige Geschirr angewiesen, um effizient, transparent und ehrlich zu bleiben.\n\nDer Name ist ein mehrschichtiger Insider-Witz und eine arbeitende Metapher für lokale KI-Entwickler:\n- **Der Laut von IA**: auf Französisch wird künstliche Intelligenz mit **IA** abgekürzt (ausgesprochen *ii-jah*). Passenderweise ist *IA* - geschrieben *Hi-Han* - die Onomatopoesie für den Schrei eines Esels.\n- **Das Lasttier**: lokale Modelle erledigen die schwere Arbeit auf deiner eigenen Maschine. Baudet verwaltet Server-Sessions, verfolgt Token-Metriken und übernimmt die Kompression auf Client-Seite, damit lokale Inferenz im Alltag praktisch wird.\n- **Den sturen Esel zähmen**: lokale Backends sind unvorhersehbar - sie weichen von Event-Namen ab, erfinden Budgets oder verbrennen das Kontextfenster für Reasoning, bevor eine Antwort entsteht. Wie ein erfahrener Führer, der einen klugen, aber sturen Esel ans Geschirr nimmt, erzwingt Baudet eine ehrliche Token-Zählung, isoliert Reasoning-Tokens und steckt Eigenheiten beim Parsen weg, ohne abzustürzen.\n\nIndem Baudet Cloud-first-Annahmen ablegt und echte Telemetrie anzeigt, können du und dein lokales Modell gemeinsam schwere Workloads bewältigen."
     ),
+    AboutVersion("build {0}", "build {0}", "version {0}", "Build {0}"),
+    AboutVersionBuilt("build {0} · compiled {1}", "build {0} · gebouwd {1}", "version {0} · compilé {1}", "Build {0} · gebaut {1}"),
     CloseButton("Close", "Sluiten", "Fermer", "Schließen"),
     // ---- help --------------------------------------------------------------
     HelpGuide("Baudet help", "Hulp over Baudet", "Aide sur Baudet", "Hilfe zu Baudet"),
@@ -512,10 +515,16 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "always-allowed servers", "altijd-toegestane servers", "serveurs toujours autorisés", "Immer erlaubte Server"
     ),
     McpAllowHint(
-        "Server ids whose tools run without a prompt. A server not listed here still asks on every call.",
-        "Server-ids waarvan de tools zonder prompt draaien. Een server die hier niet staat, vraagt nog bij elke aanroep.",
-        "Les id de serveurs dont les outils s'exécutent sans invite. Un serveur absent d'ici demande encore à chaque appel.",
-        "Server-ids, deren Tools ohne Nachfrage laufen. Ein Server, der hier nicht steht, fragt bei jedem Aufruf erneut."
+        "Server ids whose tools run without a prompt; one per line, applied with the button below. An id naming no configured server is dropped. A server not listed here still asks on every call.",
+        "Server-ids waarvan de tools zonder prompt draaien; één per regel, toegepast met de knop hieronder. Een id zonder bijbehorende server wordt verwijderd. Een server die hier niet staat, vraagt nog bij elke aanroep.",
+        "Les id de serveurs dont les outils s'exécutent sans invite ; un par ligne, appliqués via le bouton ci-dessous. Un id sans serveur correspondant est écarté. Un serveur absent d'ici demande encore à chaque appel.",
+        "Server-ids, deren Tools ohne Nachfrage laufen; einer pro Zeile, übernommen über die Schaltfläche unten. Eine Id ohne passenden konfigurierten Server wird verworfen. Ein Server, der hier nicht steht, fragt bei jedem Aufruf erneut."
+    ),
+    McpAllowApplied(
+        "always-allowed servers updated; {0} id(s) dropped as naming no configured server",
+        "altijd-toegestane servers bijgewerkt; {0} id(s) verwijderd omdat er geen geconfigureerde server bij hoort",
+        "serveurs toujours autorisés mis à jour ; {0} id écarté(s) car sans serveur configuré correspondant",
+        "immer erlaubte Server aktualisiert; {0} Id(s) verworfen, da kein konfigurierter Server dazu gehört"
     ),
     ApplyMcpButton(
         "Apply MCP servers", "MCP-servers toepassen", "Appliquer les serveurs MCP", "MCP-Server anwenden"
@@ -565,6 +574,36 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Afbeelding klaar; hij gaat mee met je volgende bericht",
         "Image prête ; elle accompagne votre prochain message",
         "Bild bereit; es wird mit Ihrer nächsten Nachricht gesendet"
+    ),
+    ImageGenerated(
+        "Image from `{0}`",
+        "Afbeelding van `{0}`",
+        "Image de `{0}`",
+        "Bild von `{0}`"
+    ),
+    ImageUnreadable(
+        "(the image could not be displayed)",
+        "(de afbeelding kon niet worden weergegeven)",
+        "(l'image n'a pas pu être affichée)",
+        "(das Bild konnte nicht angezeigt werden)"
+    ),
+    SaveImage(
+        "Save image\u2026",
+        "Afbeelding opslaan\u2026",
+        "Enregistrer l'image\u2026",
+        "Bild speichern\u2026"
+    ),
+    ImageSavedTo(
+        "saved to {0}",
+        "opgeslagen naar {0}",
+        "enregistr\u00e9 sous {0}",
+        "gespeichert unter {0}"
+    ),
+    ImageSaveFailed(
+        "(the image could not be saved)",
+        "(de afbeelding kon niet worden opgeslagen)",
+        "(l'image n'a pas pu \u00eatre enregistr\u00e9e)",
+        "(das Bild konnte nicht gespeichert werden)"
     ),
 
     // ---- transcript cards --------------------------------------------------
