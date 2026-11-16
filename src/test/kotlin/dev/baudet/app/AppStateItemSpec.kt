@@ -9,6 +9,7 @@ import dev.baudet.store.H2Store
 import dev.baudet.thread.AgentMessageItem
 import dev.baudet.thread.ItemKind
 import dev.baudet.thread.ReasoningItem
+import dev.baudet.thread.UserMessageItem
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -50,6 +51,27 @@ class AppStateItemSpec : BehaviorSpec({
             then("the reloaded answer carries its finished text") {
                 val answer = AppState(store).session.items.filterIsInstance<AgentMessageItem>().single()
                 answer.text shouldBe "here you go"
+            }
+        }
+    }
+    given("a conversation longer than one page, reopened") {
+        val dir = Files.createTempDirectory("baudet-page").resolve("db")
+        val store = H2Store(dir)
+        val id = "s-page"
+        store.rewriteItems(id, (0 until 250).map { UserMessageItem("i$it", "row $it") })
+        val state = AppState(store)
+        state.loadSession(id)
+        `when`("it reopens on just its newest page") {
+            then("one page is held while the store keeps the older rows") {
+                state.session.items.size shouldBe 200
+                state.session.hasMoreOlder shouldBe true
+                store.items(id).size shouldBe 250
+            }
+            then("a write reloads the older rows first, so none are lost") {
+                state.persist()
+                store.items(id).size shouldBe 250
+                state.session.items.size shouldBe 250
+                state.session.hasMoreOlder shouldBe false
             }
         }
     }

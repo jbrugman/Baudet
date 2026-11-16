@@ -20,6 +20,7 @@ import dev.baudet.session.Msg
 import dev.baudet.session.SessionIds
 import dev.baudet.session.SessionState
 import dev.baudet.store.H2Store
+import dev.baudet.store.ItemWindow
 import dev.baudet.store.SessionSummary
 import dev.baudet.thread.ApprovalDecision
 import dev.baudet.thread.ApprovalRequest
@@ -190,7 +191,9 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = msgs.toMutableList()
         )
-        session.items += store.items(id)
+        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
+        session.items += w.items
+        session.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
         session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
     }
@@ -292,21 +295,39 @@ class AppState(val store: H2Store) {
     }
 
     /**
-     * Load an existing conversation by id and adopt its project, so a later
-     * New session continues in the same place as the one just opened.
+     * Read one conversation out of the store into a fresh state without touching any shared
+     * field. Safe to call off the UI thread: only the store read and the immutable read of
+     * [config.model] happen here; [adoptSession] is what makes the result the current one.
+     * Its project is adopted too, so a later New session continues in the same place.
      */
-    fun loadSession(id: String) {
-        if (turning) return
-        session = SessionState(
+    fun buildSession(id: String): SessionState {
+        val s = SessionState(
             sessionId = id,
             model = store.model(id) ?: config.model,
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
-        session.items += store.items(id)
-        session.summary = store.summaryOf(id)
-        session.projectId = store.projectOfSession(id)
-        currentProjectId = session.projectId
+        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
+        s.items += w.items
+        s.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
+        s.summary = store.summaryOf(id)
+        s.projectId = store.projectOfSession(id)
+        return s
+    }
+
+    /**
+     * Make a session built by [buildSession] the current one. Mutates shared fields, so it must
+     * run on the UI thread. The split between read and adopt is what lets the read happen on a
+     * worker while the swap stays single-threaded and never interleaves with a turn's writes.
+     */
+    fun adoptSession(s: SessionState) {
+        session = s
+        currentProjectId = s.projectId
+    }
+
+    fun loadSession(id: String) {
+        if (turning) return
+        adoptSession(buildSession(id))
     }
 
     // ---- projects --------------------------------------------------------
@@ -938,7 +959,39 @@ class AppState(val store: H2Store) {
      * restart: the older turns are already gone after a compaction, so losing only the
      * summary would drop that context for good.
      */
+    /**
+     * Read one older page of a conversation for the scroll path, stopping just before
+     * [beforeSeq] and bounded at [ITEMS_PAGE_SIZE]. Read-only and store-only, so a worker can
+     * run it while the UI thread keeps showing the rows it already holds; the caller prepends
+     * the page and moves the cursor. Distinct from [ensureItemsLoaded], which the write gate
+     * uses to pull every page synchronously before a rewrite.
+     */
+    fun loadOlderItems(sessionId: String, beforeSeq: Int): ItemWindow =
+        store.itemsWindow(sessionId, ITEMS_PAGE_SIZE, beforeSeq)
+
+    /**
+     * Bring [SessionState.items] back to the full transcript before it is written out.
+     * A conversation may have opened on only its newest page, but [persistTo] rewrites every
+     * stored row from [SessionState.items]; writing that partial view would delete the older rows
+     * it never read. Loading every still-missing older page first, oldest toward the tail, keeps the
+     * single whole-rewrite safe. It runs on whichever worker is about to write, so its reads join
+     * the same serial store use as the turn's own writes. A no-op once the whole transcript is held.
+     */
+    private fun ensureItemsLoaded(s: SessionState) {
+        if (!s.hasMoreOlder) return
+        while (true) {
+            val w = store.itemsWindow(s.sessionId, ITEMS_PAGE_SIZE, beforeSeq = s.oldestLoadedSeq)
+            if (w.items.isNotEmpty()) s.items.addAll(0, w.items)
+            if (!w.hasMoreOlder) {
+                s.oldestLoadedSeq = null
+                break
+            }
+            s.oldestLoadedSeq = w.olderSeq
+        }
+    }
+
     private fun persistTo(s: SessionState) {
+        ensureItemsLoaded(s)
         store.rewriteMessages(s.sessionId, s.messages)
         store.rewriteItems(s.sessionId, s.items)
         store.upsertSession(
@@ -977,6 +1030,8 @@ class AppState(val store: H2Store) {
          * machine can act on a higher [AppConfig.maxParallelTurns].
          */
         private const val MAX_SAFE_PARALLEL = 1
+        /** How many transcript rows a conversation opens on; older pages load on scroll. */
+        private const val ITEMS_PAGE_SIZE = 200
         /**
          * Room held back between the model's stated window and what we treat as usable. A window is
          * the total the backend counts, and a request that lands exactly on it is still refused, so

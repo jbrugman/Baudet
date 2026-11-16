@@ -2,14 +2,14 @@
 title The compaction fold (AppState.compact -> Compactor.compact)
 start
 :AppState.compact(keepLast, onDelta);
-if (turnLock CAS false -> true ?) then (no)
+if (tryClaimTurn() claims a slot ?) then (no)
   :throw IllegalStateException;
   stop
 endif
 :window = contextWindowTokens()\n(same window as the turn guard);
 :Compactor(config, window)\n.compact(session, keepLast, onDelta);
 if (CompactionPlan.splitAt(size, keepLast)\nsize <= keepLast ?) then (yes: nothing to fold)
-  :return state.summary (unchanged);
+  :return CompactionOutcome.NothingToFold;
 else (no)
   :maxChars = maxSourceChars()\nmin(48k, budget*3, window/2*3)\ncoerceAtLeast 4k;
 endif
@@ -38,11 +38,11 @@ while (not stop and remaining not empty ?) is (continue)
   endif
 endwhile (stop or empty)
 if (folded == 0 ?) then (yes)
-  :return null\n(nothing proved -> nothing dropped);
+  :return SummaryRefused(reason) if an answer\narrived but was refused, else OversizedTurn(maxChars);
 else (no)
   :state.summary = summary;\nmessages[0..folded].clear();\npreviousResponseId = null;
-  :return summary;
+  :return CompactionOutcome.Compacted(summary);
 endif
-:finally: turnLock = false;\nthen AppState.persist();
+:finally: releaseTurn();\nthen AppState.persist();
 stop
 @enduml

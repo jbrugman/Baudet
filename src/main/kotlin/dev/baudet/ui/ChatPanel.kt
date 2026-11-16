@@ -18,6 +18,7 @@ import java.awt.event.ActionEvent
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.image.BufferedImage
+import java.util.concurrent.Executors
 import javax.swing.AbstractAction
 import javax.swing.BoxLayout
 import javax.swing.ImageIcon
@@ -67,6 +68,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      */
     private val transcript = TranscriptView().apply {
         onApproval = { id, decision -> state.resolveApproval(id, decision) }
+        onLoadOlder = { loadOlder() }
     }
 
     private val input = JTextArea(4, 60).apply {
@@ -181,6 +183,22 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private var hasThinking = false
 
     private var busy = false
+
+    /**
+     * The serial worker that opens a conversation off the UI thread. One conversation reads at
+     * a time, and only while no turn runs: [loading] holds [send] quiet while a load is in
+     * flight, and [busy] holds a load off while a turn runs. That pairing is what keeps store
+     * use serial -- no query ever interleaves a turn persist on the shared H2 connection --
+     * which is the invariant the codebase already relied on when it kept turn writes and UI
+     * reads one at a time. The thread is a daemon so an unfinished read never delays shutdown.
+     */
+    private val loadExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "baudet-load").apply { isDaemon = true }
+    }
+    /** Bumped on every conversation switch; a finished load whose generation is stale is dropped. */
+    private var loadGeneration = 0
+    /** True while a conversation is being read on the worker; [send] stays quiet until it clears. */
+    private var loading = false
 
     /** The worker running the turn in flight, so [stop] can interrupt it; null between turns. */
     private var worker: Thread? = null
@@ -394,6 +412,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // Prefer the persisted rows: a reload then rebuilds the cards, not just the prose.
         if (s.items.isNotEmpty()) transcript.rebuildItems(s.summary, s.items)
         else transcript.rebuild(s.summary, s.messages)
+        transcript.hasMoreOlder = s.hasMoreOlder
         status.foreground = BaudetPalette.dim
         status.text = statusLine()
         updateToolWarning()
@@ -424,13 +443,78 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Switch the transcript to an existing session chosen in the sidebar. Ignored
-     * mid-stream, so a reply in flight is never torn down under the user.
+     * Switch the transcript to an existing session chosen in the sidebar. The store read that
+     * builds the conversation runs on [loadExecutor], so a long transcript cannot freeze the UI;
+     * the swap into [state] stays on the EDT and happens only if this is still the chosen one.
+     * During the read the previous transcript stays visible -- no blank frame -- and [send] is
+     * held so the read cannot interleave with a turn's writes. Ignored mid-stream.
      */
     fun loadSession(id: String) {
         if (busy) return
-        state.loadSession(id)
-        refresh()
+        val gen = ++loadGeneration
+        loading = true
+        status.foreground = BaudetPalette.dim
+        status.text = Texts[Key.LoadingSession]
+        loadExecutor.execute {
+            try {
+                val built = state.buildSession(id)
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    state.adoptSession(built)
+                    loading = false
+                    refresh()
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    loading = false
+                    status.foreground = BaudetPalette.error
+                    status.text = e.message ?: "?"
+                }
+            }
+        }
+    }
+
+    /**
+     * Page in one older block when the reader reaches the head. It runs on [loadExecutor] like
+     * a conversation open and reuses [loading], so an older read never interleaves a turn's
+     * writes -- the same serial-store invariant as [loadSession]. The page is prepended on the
+     * EDT only if this is still the chosen conversation ([loadGeneration] unchanged); a switch
+     * in flight owns the loading flag, so a stale result is dropped without clearing it. The
+     * view holds its own viewport steady through [TranscriptView.olderReady]. A turn in flight
+     * or a load already running defers the request rather than racing it.
+     */
+    private fun loadOlder() {
+        if (busy || loading) {
+            transcript.olderLoadSkipped()
+            return
+        }
+        val gen = loadGeneration
+        val sessionId = state.session.sessionId
+        val beforeSeq = state.session.oldestLoadedSeq ?: run {
+            transcript.olderLoadSkipped()
+            return
+        }
+        loading = true
+        loadExecutor.execute {
+            try {
+                val w = state.loadOlderItems(sessionId, beforeSeq)
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    loading = false
+                    val s = state.session
+                    if (w.items.isNotEmpty()) s.items.addAll(0, w.items)
+                    s.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
+                    transcript.olderReady(s.summary, s.items, s.hasMoreOlder)
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    loading = false
+                    transcript.olderLoadSkipped()
+                }
+            }
+        }
     }
 
     /**
@@ -440,6 +524,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      */
     fun startProjectChat(projectId: String?) {
         if (busy) return
+        loadGeneration++
+        loading = false
         state.startSessionIn(projectId)
         refresh()
         val name = state.projects().firstOrNull { it.id == projectId }?.name
@@ -518,6 +604,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      * dropped and never needs a second press. An empty box does nothing either way.
      */
     private fun send() {
+        if (loading) return
         val text = input.text.trim()
         if (busy) {
             if (text.isNotEmpty()) steer(text)
@@ -709,6 +796,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
 
     private fun newSession() {
         if (busy) return
+        loadGeneration++
+        loading = false
         state.newSession()
         refresh()
         status.text = Texts.fmt(Key.NewSessionStatus, state.session.sessionId)

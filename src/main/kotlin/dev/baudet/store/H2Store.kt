@@ -175,19 +175,56 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
             ps.setString(1, sessionId)
             ps.executeQuery().use { rs ->
                 buildList {
-                    while (rs.next()) {
-                        // A row that no longer decodes is dropped rather than failing the read,
-                        // the same tolerance the stored config gets: one stale card must not
-                        // erase the conversation around it.
-                        try {
-                            add(dev.baudet.api.json.decodeFromString(Item.serializer(), rs.getString(1)))
-                        } catch (e: Exception) {
-                            System.err.println("skipping unreadable transcript item: ${e.message}")
-                        }
-                    }
+                    while (rs.next()) decodeItem(rs.getString(1))?.let { add(it) }
                 }
             }
         }
+
+    /**
+     * Decode one stored row, dropping it (and saying so on stderr) when it no longer parses --
+     * the same tolerance the stored config gets: one stale card must not erase the conversation
+     * around it. Shared by the full read and the paged window so both agree on what is readable.
+     */
+    private fun decodeItem(payload: String): Item? =
+        try {
+            dev.baudet.api.json.decodeFromString(Item.serializer(), payload)
+        } catch (e: Exception) {
+            System.err.println("skipping unreadable transcript item: ${e.message}")
+            null
+        }
+
+    override fun itemsWindow(sessionId: String, limit: Int, beforeSeq: Int?): ItemWindow {
+        val sql = StringBuilder("SELECT payload, seq FROM items WHERE session_id = ?")
+        if (beforeSeq != null) sql.append(" AND seq < ?")
+        sql.append(" ORDER BY seq DESC LIMIT ?")
+        db.prepareStatement(sql.toString()).use { ps ->
+            var i = 1
+            ps.setString(i++, sessionId)
+            if (beforeSeq != null) ps.setInt(i++, beforeSeq)
+            ps.setInt(i, limit + 1)
+            ps.executeQuery().use { rs ->
+                // Newest first as read. Take at most [limit] rows and let a (limit+1)-th prove more
+                // precedes them, counted on stored rows rather than decoded ones so a dropped row
+                // cannot make the window over-read or the cursor under-count.
+                val newestFirst = ArrayList<Item>()
+                var rowCount = 0
+                var hasMore = false
+                var lowestSeq: Int? = null
+                while (rs.next()) {
+                    if (rowCount < limit) {
+                        lowestSeq = rs.getInt(2)
+                        decodeItem(rs.getString(1))?.let { newestFirst.add(it) }
+                        rowCount++
+                    } else {
+                        hasMore = true
+                        break
+                    }
+                }
+                newestFirst.reverse()
+                return ItemWindow(items = newestFirst, olderSeq = lowestSeq, hasMoreOlder = hasMore)
+            }
+        }
+    }
 
     override fun rewriteItems(sessionId: String, items: List<Item>) {
         val auto = db.autoCommit

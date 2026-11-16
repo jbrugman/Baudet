@@ -166,6 +166,49 @@ class ItemStoreSpec : BehaviorSpec({
             }
         }
     }
+    given("a long transcript paged for a windowed read") {
+        val store = freshStore()
+        val id = "s-page"
+        store.rewriteItems(id, (0 until 250).map { UserMessageItem("i$it", "row $it") })
+        `when`("the newest window is read") {
+            val w = store.itemsWindow(id, 100)
+            then("it holds the newest rows, oldest first") {
+                w.items.size shouldBe 100
+                w.items.first() shouldBe UserMessageItem("i150", "row 150")
+                w.items.last() shouldBe UserMessageItem("i249", "row 249")
+            }
+            then("it reports the older boundary and that more precede it") {
+                w.olderSeq shouldBe 150
+                w.hasMoreOlder shouldBe true
+            }
+        }
+        `when`("the next older window is read before that boundary") {
+            val w = store.itemsWindow(id, 100, beforeSeq = 150)
+            then("it yields the next hundred rows, oldest first, still with older behind") {
+                w.items.size shouldBe 100
+                w.items.first() shouldBe UserMessageItem("i50", "row 50")
+                w.items.last() shouldBe UserMessageItem("i149", "row 149")
+                w.olderSeq shouldBe 50
+                w.hasMoreOlder shouldBe true
+            }
+        }
+        `when`("a window reaches the start of the conversation") {
+            val w = store.itemsWindow(id, 100, beforeSeq = 50)
+            then("the remaining rows come back and nothing is reported as older") {
+                w.items.size shouldBe 50
+                w.items.first() shouldBe UserMessageItem("i0", "row 0")
+                w.olderSeq shouldBe 0
+                w.hasMoreOlder shouldBe false
+            }
+        }
+        `when`("the whole conversation fits one page") {
+            val w = store.itemsWindow(id, 300)
+            then("every row returns and nothing older is reported") {
+                w.items.size shouldBe 250
+                w.hasMoreOlder shouldBe false
+            }
+        }
+    }
 })
 
 /** Encode an enum with its generated serializer and read the primitive string back, decoder-side. */
