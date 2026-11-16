@@ -184,8 +184,10 @@ class SafeCommandsSpec : BehaviorSpec({
     /*
      * Family trust is the route an Always takes for a build or commit whose text keeps changing, so the
      * key it stores must be neither broader than the program the user named nor reachable by a shape that
-     * writes. The key is the bare program, or git plus its subcommand; it is withheld for a shell, an
-     * interpreter, a deleting tool, a chain, a path-named program other than a build wrapper, a newline
+     * writes. The key is the bare program, or git plus its subcommand; a chain earns a key only when every
+     * segment would earn one alone. It is withheld for a shell, an
+     * interpreter, a deleting tool, a chain with an unsafe segment, a path-named program other than a build
+     * wrapper, a newline
      * that separates a second command, a destructive git subcommand, or a
      * nominally harmless program caught mid-write. A withheld key is what makes a bad hand-typed trusted
      * entry unable to match a real run, so it falls back to the verbatim pin instead of a broad trust.
@@ -201,7 +203,10 @@ class SafeCommandsSpec : BehaviorSpec({
             "git branch feature" to "git branch",
             "  mvn   -B  test  " to "mvn",
             "./mvnw -Dtest=A test" to "./mvnw",
-            "./gradlew build" to "./gradlew"
+            "./gradlew build" to "./gradlew",
+            // a chain of safe segments earns a family, so one Always covers its reworded variations
+            "pwd && ls" to "pwd && ls",
+            "git diff --stat | tail -30" to "git diff | tail"
         )
         val keyless = listOf(
             // shells, interpreters and payload tools can run anything from one argument
@@ -212,8 +217,8 @@ class SafeCommandsSpec : BehaviorSpec({
             "sort -o out in", "find . -delete", "uniq a b",
             // git that escapes its repository or throws work away
             "git clean -fd", "git reset --hard", "git log --output=x", "git -c x=y status",
-            // chains and absolute-path programs are never family-trusted
-            "pwd && ls", "/usr/bin/ls",
+            // a chain whose weakest segment writes, and absolute-path programs, are never family-trusted
+            "pwd && rm -rf x", "git diff | rm -f x", "/usr/bin/ls",
             // nothing to key on
             "", "   "
         )

@@ -43,6 +43,25 @@ private const val MAX_PARALLEL_TOOL_CALLS = 2
  */
 private const val MAX_BLANK_TURNS = 2
 
+/**
+ * A short in-flight instruction appended to the working conversation when the model parks a turn
+ * blank, so the next request differs from the one that just returned nothing. A deterministic local
+ * model replays identical messages into an identical blank reply -- the old bare retry changed
+ * nothing -- so the only thing that ever moved it was input that differed, which is what a manual
+ * nudge did. Kept out of the persisted history (never added to [added]), so the transcript stays clean.
+ */
+private const val BLANK_NUDGE =
+    "Your previous turn returned neither an answer nor a tool call. If you intend to use a tool, " +
+    "emit the call now; otherwise reply with your final answer."
+
+/**
+ * Whether a call-less turn carries nothing a reader could act on: blank, or only placeholder
+ * punctuation such as the "..." a reasoning model sometimes leaves on the answer channel. Neither is
+ * a real answer, so both earn one more request instead of ending the turn silently.
+ */
+private fun isBlankish(text: String): Boolean =
+    text.all { it.isWhitespace() || it == '.' || it == '\u2026' }
+
 class ToolLoop(
     private val turnSource: TurnSource,
     private val registry: ToolRegistry,
@@ -114,14 +133,16 @@ class ToolLoop(
 
             if (calls.isEmpty()) {
                 // A reasoning model can spend a whole turn in its reasoning channel and leave the
-                // answer channel blank, with no call extracted. That is not a final answer: the only
-                // thing that ever moved it was another request, which is what a manual nudge did. So
-                // a blank, call-less turn is retried -- without persisting the empty reply -- up to a
-                // small bound, because under a server session the reasoning already lives server-side
-                // and the next request continues it. Past the bound it ends as before; the caller
-                // flags the empty turn, so a run is never silently a no-op again.
-                if (turn.text.isBlank() && blanks < MAX_BLANK_TURNS) {
+                // answer channel blank (or a placeholder like "..."), with no call extracted. That is
+                // not a final answer. A bare retry only helped under a server session: replaying the
+                // same messages into a deterministic local model reproduces the same blank reply, so
+                // nothing moved and a nudge was needed. The fix is to make the next request differ --
+                // append a short in-flight nudge that is never persisted -- up to a small bound. Past
+                // the bound it ends as before; the caller flags the empty turn, so a run is never a
+                // silent no-op again.
+                if (isBlankish(turn.text) && blanks < MAX_BLANK_TURNS) {
                     blanks++
+                    msgs.add(Msg("user", BLANK_NUDGE))
                     return@repeat
                 }
                 addAssistant(msgs, added, turn)

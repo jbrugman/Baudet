@@ -104,6 +104,43 @@ class CommandSignatureSpec : BehaviorSpec({
     }
 
     /*
+     * "Always allow" must mean always, the way a developer expects from a tool like Codex: one decision
+     * on a pipeline silences every reworded variation of it. A chain of otherwise-safe segments therefore
+     * earns a family, recorded as the chain's shape so a pipeline never matches a sequence. But the family
+     * is only as safe as its weakest segment, so a single unsafe part strips the whole chain's family.
+     */
+    given("a chain of segments asked for its trusted family") {
+        `when`("every segment is safe to vouch for") {
+            then("the whole chain earns a family, so one Always covers every reworded variation") {
+                CommandSignature.trustedEntry("git diff --stat | tail -30") shouldBe "git diff | tail"
+                CommandSignature.trustedEntry("git diff HEAD | tail -50") shouldBe "git diff | tail"
+                CommandSignature.trustedEntry("mvn -q compile && git status") shouldBe "mvn && git status"
+            }
+            then("the chain's operator is part of the key, so a pipeline never matches a sequence") {
+                CommandSignature.trustedEntry("git diff | tail") shouldNotBe
+                    CommandSignature.trustedEntry("git diff ; tail")
+            }
+        }
+        `when`("one segment is blocklisted") {
+            then("the whole chain is refused a family, so a trusted read cannot smuggle a destructive part") {
+                (CommandSignature.trustedEntry("git diff | rm -rf x") == null) shouldBe true
+                (CommandSignature.trustedEntry("echo hi && python evil.py") == null) shouldBe true
+            }
+        }
+        `when`("one segment is a destructive git subcommand") {
+            then("the whole chain is refused a family") {
+                (CommandSignature.trustedEntry("git status && git reset --hard") == null) shouldBe true
+            }
+        }
+        `when`("the chain carries a redirect or substitution") {
+            then("no family is granted, so a redirect still falls back to a verbatim pin") {
+                (CommandSignature.trustedEntry("git diff > out.txt") == null) shouldBe true
+                (CommandSignature.trustedEntry("cat $(ls)") == null) shouldBe true
+            }
+        }
+    }
+
+    /*
      * A newline is a shell command separator, not spacing to forget: a second line is a second
      * command. Folding it away would let a read the gate vouches for drag a hidden write into a silent
      * Always, so a newline is left intact and the whole line keeps only its verbatim pin, never a family.

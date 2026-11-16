@@ -23,7 +23,13 @@ class AppStateSummarySpec : BehaviorSpec({
         state.persist()
         `when`("a fresh AppState opens the same store") {
             val reopened = AppState(H2Store(db))
-            then("the summary survives the restart") {
+            // Opening never auto-loads the latest conversation; the summary still survives and is
+            // reached on purpose, so the persistence round-trip stays covered.
+            then("it opens on a fresh conversation, not the saved one") {
+                (reopened.session.sessionId == id) shouldBe false
+            }
+            then("the summary survives the restart, reached through loadSession") {
+                reopened.loadSession(id)
                 reopened.session.sessionId shouldBe id
                 reopened.session.summary shouldBe "they chose option two"
                 reopened.session.messages.map { it.content } shouldBe listOf("after the cut")

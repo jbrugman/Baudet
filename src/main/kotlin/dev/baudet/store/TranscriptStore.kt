@@ -27,6 +27,14 @@ interface TranscriptStore {
     fun rewriteMessages(sessionId: String, msgs: List<Msg>)
 
     /**
+     * Append the turns not yet in the store, starting at [fromSeq], leaving every existing row
+     * untouched. This is the normal write: a turn only ever adds turns at the end, so the store --
+     * the source of truth -- grows by append instead of being deleted and rebuilt from a view that
+     * may not hold the whole conversation. [msgs] must be the tail beyond [fromSeq], in order.
+     */
+    fun appendMessages(sessionId: String, fromSeq: Int, msgs: List<Msg>)
+
+    /**
      * The rich transcript rows -- command, file-change and tool-call cards, errors -- as a
      * faithful record of what the interface showed, so a reload rebuilds the cards rather
      * than flattening them to prose. Rows are stored by their [Item] type tag and read back in
@@ -43,7 +51,19 @@ interface TranscriptStore {
      * sequence-based cursor stays correct even when such a row leaves a gap in the numbering.
      */
     fun itemsWindow(sessionId: String, limit: Int, beforeSeq: Int? = null): ItemWindow
-    /** Whole-rewrite a conversation's transcript rows, mirroring [rewriteMessages] on replace. */
+    /**
+     * Append transcript rows after the newest row already stored, in order. The audit trail is
+     * append-only -- a row is written once, when it completes, and is never edited or trimmed --
+     * so a turn persists by appending its finished rows rather than rewriting the trail. [items]
+     * must be exactly the rows newer than the caller's persisted tail marker.
+     */
+    fun appendItems(sessionId: String, items: List<Item>)
+
+    /**
+     * Replace a conversation's transcript rows wholesale. Not the per-turn path (that uses
+     * [appendItems]); retained as the seeding/replace primitive a caller uses when it deliberately
+     * rewrites the trail rather than growing it.
+     */
     fun rewriteItems(sessionId: String, items: List<Item>)
     /** Delete one conversation and its messages; other sessions and files on disk are untouched. */
     fun deleteSession(id: String)

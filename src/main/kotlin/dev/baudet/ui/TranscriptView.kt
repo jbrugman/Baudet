@@ -48,6 +48,7 @@ import javax.swing.JTextPane
 import javax.swing.Scrollable
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 import javax.swing.text.DefaultStyledDocument
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
@@ -214,6 +215,9 @@ class TranscriptView : JPanel(BorderLayout()) {
 
         /** Widest an inline tool image is drawn, in pixels. Never upscaled past this. */
         private const val MAX_IMAGE_WIDTH = 640
+
+        /** Streaming repaints merge to roughly one per frame, in milliseconds (~30 fps). */
+        private const val RELAYOUT_MS = 33
     }
 
     /**
@@ -431,9 +435,24 @@ class TranscriptView : JPanel(BorderLayout()) {
         open.clear()
         rows.removeAll()
         promptImage = false
-        summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
-        items.forEach { replayItem(it) }
+        firstContentIndex = if (summary != null) 1 else 0
+        renderedItems = items.size
+        bulkAdd = true
+        try {
+            summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
+            items.forEach { replayItem(it) }
+        } finally {
+            bulkAdd = false
+        }
         rows.revalidate()
+        if (followTail) {
+            // Lay out synchronously and land the tail before the first paint. Deferring only the
+            // scroll let the EDT paint the head first and then jump down once layout settled -- the
+            // visible half-second hitch. Validating now makes the very first frame already sit at the
+            // newest row; the deferred retry is a fallback for a view not measured on first show yet.
+            scroll.validate()
+            scrollToTail()
+        }
         rows.repaint()
         if (followTail) SwingUtilities.invokeLater { scrollToTail() }
     }
@@ -449,17 +468,39 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
 
     /**
-     * Finish an older-page load: replay the now-longer list without following the tail, then
-     * push the bar down by the height that appeared above, so the row the reader was looking at
-     * stays put. [moreOlder] tells the view whether to keep offering older pages. It clears
-     * [awaitingOlder] only after placing the bar, so the deferred layout the rebuild schedules
-     * cannot fire another load with the bar still parked at the head.
+     * Finish an older-page load without rebuilding. Only the rows for the page the host just
+     * prepended are inserted at the head; the rows already shown are left as they were. The bar is
+     * then pushed down by the height that appeared above, so the row the reader was looking at stays
+     * put. [moreOlder] tells the view whether to keep offering older pages. [awaitingOlder] clears
+     * only after placing the bar, so the deferred layout cannot fire another load with the bar still
+     * parked at the head.
      */
     fun olderReady(summary: String?, items: List<Item>, moreOlder: Boolean) {
-        rebuildInto(summary, items, followTail = false)
-        val delta = rows.preferredSize.height - prevHeight
+        // The host already prepended the just-read page to [items]; the rows for that page are the
+        // only ones added here -- inserted at the head, with the rows already shown left untouched.
+        // Replaying the whole list on every page is what froze the app on a long transcript.
+        val newCount = items.size - renderedItems
+        if (newCount <= 0) {
+            hasMoreOlder = moreOlder
+            awaitingOlder = false
+            return
+        }
+        // The page sits at the head of [items], oldest first, exactly as the store returned it.
+        val page = items.take(newCount)
+        bulkAdd = true
+        pendingInsertAt = firstContentIndex
+        try {
+            page.forEach { replayItem(it) }
+        } finally {
+            bulkAdd = false
+            pendingInsertAt = null
+        }
+        renderedItems = items.size
         hasMoreOlder = moreOlder
+        val delta = rows.preferredSize.height - prevHeight
         SwingUtilities.invokeLater {
+            // Lay the prepended rows out before nudging the bar, or the shift reads a stale height.
+            scroll.validate()
             val bar = scroll.verticalScrollBar
             bar.value = (prevValue + delta).coerceAtMost(bar.maximum)
             awaitingOlder = false
@@ -563,6 +604,18 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
 
     private fun addRow(row: JComponent) {
+        // During a bulk rebuild the host drives one layout pass for the whole batch, so skip the
+        // per-row revalidate/repaint/scroll that live streaming relies on.
+        if (bulkAdd) {
+            val at = pendingInsertAt
+            if (at != null) {
+                rows.add(row, at)
+                pendingInsertAt = at + 1
+            } else {
+                rows.add(row)
+            }
+            return
+        }
         val follow = atTail()
         rows.add(row)
         rows.revalidate()
@@ -571,13 +624,65 @@ class TranscriptView : JPanel(BorderLayout()) {
         if (follow) SwingUtilities.invokeLater { scrollToTail() }
     }
 
-    /** Append to a row's own document, following the tail only when the reader was already there. */
+    /**
+     * Whether a streamed row still owes its visual pass. Set by every chunk and cleared by
+     * [relayoutTimer]. Touched only on the event dispatch thread, exactly like the writes that
+     * set it, so it needs no lock.
+     */
+    private var dirtyRelayout = false
+
+    /**
+     * Set while [rebuildInto] replays a stored page: [addRow] then only appends and leaves the
+     * single layout pass to the rebuild itself. Opening a thread or scrolling through a long one
+     * therefore pays one revalidate per page instead of one per row, which is what made a big
+     * transcript hang. The live streaming path never sets it, so streamed chunks still coalesce
+     * through [relayoutTimer] exactly as before.
+     */
+    private var bulkAdd = false
+
+    /**
+     * The number of [Item]s this view currently holds a row for, oldest first. A prepend computes
+     * the just-loaded page as `items.size - renderedItems`, so an older page adds only its own rows
+     * without replaying those already on screen. Reset by [rebuildInto].
+     */
+    private var renderedItems = 0
+
+    /** The index in [rows] where item rows begin -- past the optional summary banner. Older pages
+     *  insert here, so the banner never moves and older rows never land above it. */
+    private var firstContentIndex = 0
+
+    /**
+     * Set only during an older-page prepend: [addRow] then inserts at this running index (and
+     * advances it) instead of appending. Null everywhere else, so the live stream and a fresh build
+     * keep appending exactly as before.
+     */
+    private var pendingInsertAt: Int? = null
+
+    /**
+     * The one visual pass shared by every streamed write. Inserting a chunk into a row's document
+     * is cheap; revalidating and repainting the whole row stack is not, and paying it per chunk is
+     * what made a long transcript crawl as it grew. Chunks insert at once and merely flag this
+     * dirty; the timer repaints at most once a frame and stops on its first idle tick, so an idle
+     * transcript leaves nothing scheduled.
+     */
+    private val relayoutTimer = Timer(RELAYOUT_MS) { e ->
+        if (dirtyRelayout) {
+            dirtyRelayout = false
+            rows.revalidate()
+            rows.repaint()
+            // Commit to following now, then scroll after the layout pass, once the bar's maximum
+            // reflects the height the chunks just added.
+            if (atTail()) SwingUtilities.invokeLater { scrollToTail() }
+        } else {
+            (e.source as Timer).stop()
+        }
+    }.apply { setCoalesce(true) }
+
+    /** Append to a row's own document; the costly visual pass is coalesced into [relayoutTimer]. */
     private fun write(doc: DefaultStyledDocument, text: String, attrs: SimpleAttributeSet) {
-        val follow = atTail()
         doc.insertString(doc.length, text, attrs)
-        rows.revalidate()
-        rows.repaint()
-        if (follow) SwingUtilities.invokeLater { scrollToTail() }
+        dirtyRelayout = true
+        if (!relayoutTimer.isRunning) relayoutTimer.start()
     }
 
     /**

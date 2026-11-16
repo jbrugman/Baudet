@@ -1,6 +1,7 @@
 package dev.baudet.store
 
 import dev.baudet.api.json
+import dev.baudet.session.Msg
 import dev.baudet.thread.AgentMessageItem
 import dev.baudet.thread.ApprovalDecision
 import dev.baudet.thread.CommandExecutionItem
@@ -209,6 +210,51 @@ class ItemStoreSpec : BehaviorSpec({
             then("every row returns and nothing older is reported") {
                 w.items.size shouldBe 250
                 w.hasMoreOlder shouldBe false
+            }
+        }
+    }
+
+    given("the append path a turn uses to persist") {
+        val store = freshStore()
+        val id = "s-append"
+
+        `when`("items are appended after a seeded page") {
+            store.rewriteItems(
+                id, listOf(UserMessageItem("i0", "row 0"), UserMessageItem("i1", "row 1"))
+            )
+            store.appendItems(
+                id, listOf(AgentMessageItem("i2", "row 2"), AgentMessageItem("i3", "row 3"))
+            )
+            then("they land after the existing rows in sequence order") {
+                store.items(id).size shouldBe 4
+                store.items(id)[2] shouldBe AgentMessageItem("i2", "row 2")
+                store.items(id)[3] shouldBe AgentMessageItem("i3", "row 3")
+            }
+        }
+        `when`("items are appended to an empty session") {
+            val empty = "s-append-empty"
+            store.appendItems(empty, listOf(UserMessageItem("a", "first")))
+            then("the first stored sequence starts at zero") {
+                store.items(empty).size shouldBe 1
+                store.items(empty).first() shouldBe UserMessageItem("a", "first")
+            }
+        }
+        `when`("an empty item list is appended") {
+            val before = store.items(id)
+            store.appendItems(id, emptyList())
+            then("nothing changes") {
+                store.items(id) shouldBe before
+            }
+        }
+        `when`("message tails are appended at a sequence boundary") {
+            val mid = "s-append-msg"
+            store.rewriteMessages(mid, listOf(Msg("user", "u0"), Msg("assistant", "a0")))
+            store.appendMessages(mid, 2, listOf(Msg("user", "u1"), Msg("assistant", "a1")))
+            then("they continue after the existing rows without renumbering them") {
+                val all = store.messages(mid)
+                all.size shouldBe 4
+                all[2] shouldBe Msg("user", "u1")
+                all[3] shouldBe Msg("assistant", "a1")
             }
         }
     }

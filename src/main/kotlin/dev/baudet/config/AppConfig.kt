@@ -103,11 +103,20 @@ data class AppConfig(
      */
     var autoAllowCommands: MutableList<String> = mutableListOf(),
     /**
-     * Opt-in: auto-approve commands [dev.baudet.tool.SafeCommands] recognises as plainly read-only
-     * (a single simple command like ls, cat or git status). Default off, so a fresh install still
-     * asks for every command; the user turns it on deliberately to stop being nagged over harmless ones.
+     * Auto-approve commands [dev.baudet.tool.SafeCommands] recognises as plainly read-only (a single
+     * simple command like ls, cat or git status), the way a coding tool like Codex runs a read without
+     * a prompt. Default on for that parity; the recognizer still refuses a chain, a redirect or a write,
+     * and the user can switch it off in Settings to be asked for every command again.
      */
-    var autoApproveSafeCommands: Boolean = false,
+    var autoApproveSafeCommands: Boolean = true,
+    /**
+     * Records that the one-time safe-read default migration already ran for this profile, so it is never
+     * applied twice. An older profile stored the value while it defaulted to off; [dev.baudet.app.AppState]
+     * flips that one saved profile to the new on-default at first open, then sets this marker -- via the
+     * migration itself or via any later [dev.baudet.app.AppState.saveConfig] -- so a user who deliberately
+     * switched safe reads back off afterwards is never overwritten again.
+     */
+    var autoApproveSafeMigrated: Boolean = false,
     /**
      * Command families the user chose to trust, each a bare program (mvn) or a git program and
      * subcommand (git commit). A single simple command runs without a prompt when its family key, as

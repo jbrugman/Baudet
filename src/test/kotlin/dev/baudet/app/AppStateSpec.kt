@@ -1,5 +1,6 @@
 package dev.baudet.app
 
+import dev.baudet.config.AppConfig
 import dev.baudet.config.ContextStrategy
 import dev.baudet.config.ToolMode
 import dev.baudet.i18n.Language
@@ -25,13 +26,20 @@ class AppStateSpec : BehaviorSpec({
     fun freshState(): AppState =
         AppState(H2Store(Files.createTempDirectory("baudet-app").resolve("db")))
 
-    given("a store holding the most recent conversation") {
+    given("a store holding an earlier conversation") {
         val store = H2Store(Files.createTempDirectory("baudet-app").resolve("db"))
         store.upsertSession("s-last", model = "m", prevResponseId = "resp", lastSeq = 1)
         store.rewriteMessages("s-last", listOf(Msg("user", "hi")))
         `when`("AppState opens on that store") {
             val state = AppState(store)
-            then("the conversation is restored into the live session") {
+            // The app deliberately opens on a fresh conversation; the most recent one is no longer
+            // restored as a side effect of launching, but it is still reachable on purpose.
+            then("it opens on a fresh conversation, not the saved one") {
+                (state.session.sessionId == "s-last") shouldBe false
+                state.session.messages shouldBe emptyList()
+            }
+            then("the earlier conversation is reached only through loadSession") {
+                state.loadSession("s-last")
                 state.session.sessionId shouldBe "s-last"
                 state.session.messages.map { it.content } shouldBe listOf("hi")
             }
@@ -342,6 +350,53 @@ class AppStateSpec : BehaviorSpec({
             state.learnContextWindow(null)
             then("nothing is stored, so unknown stays unknown") {
                 state.config.learnedContextWindow shouldBe 0
+            }
+        }
+    }
+
+    /*
+     * The safe-read auto-approve default flipped to on for Codex parity. Only the fresh-install default
+     * changes by itself; a profile already saved by an older build still carries the old off value, so it
+     * must be flipped exactly once at first open and the choice recorded, while a deliberate opt-out made
+     * afterwards and a never-saved profile are both left exactly as they are.
+     */
+    given("a profile saved by an older build, before safe reads auto-approved") {
+        val store = H2Store(Files.createTempDirectory("baudet-migrate").resolve("db"))
+        store.save(AppConfig(autoApproveSafeCommands = false, autoApproveSafeMigrated = false))
+        `when`("the new build opens it") {
+            val state = AppState(store)
+            then("safe reads flip to the new default once, so the user is not nagged") {
+                state.config.autoApproveSafeCommands shouldBe true
+            }
+            then("the migration is recorded, so it never runs twice") {
+                state.config.autoApproveSafeMigrated shouldBe true
+                state.store.load()?.autoApproveSafeMigrated shouldBe true
+            }
+            then("a second open leaves it on, now because the marker is set") {
+                AppState(store).config.autoApproveSafeCommands shouldBe true
+            }
+        }
+    }
+
+    given("a profile that deliberately switched safe reads back off") {
+        val store = H2Store(Files.createTempDirectory("baudet-optout").resolve("db"))
+        store.save(AppConfig(autoApproveSafeCommands = false, autoApproveSafeMigrated = true))
+        `when`("the app reopens it") {
+            then("the deliberate choice holds, because the marker already ran") {
+                AppState(store).config.autoApproveSafeCommands shouldBe false
+            }
+        }
+    }
+
+    given("a brand-new install that never saved a profile") {
+        val store = H2Store(Files.createTempDirectory("baudet-fresh").resolve("db"))
+        `when`("the app opens for the first time") {
+            val state = AppState(store)
+            then("safe reads default to on for Codex parity") {
+                state.config.autoApproveSafeCommands shouldBe true
+            }
+            then("nothing is written before the user changes anything") {
+                store.load() shouldBe null
             }
         }
     }

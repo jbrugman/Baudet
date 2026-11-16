@@ -7,6 +7,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 import java.util.stream.Collectors
 import kotlin.streams.asSequence
 
@@ -27,6 +28,19 @@ class Http(private val cfg: AppConfig) {
 
     /** Upper bound for one exchange: 30 min, a large local generation can take that. */
     private val exchangeTimeout: Duration = Duration.ofMinutes(30)
+
+    /**
+     * Max quiet time on an open SSE stream before the watchdog closes it. HttpRequest.timeout only
+     * bounds the wait for response headers; once streaming starts java.net.http applies no per-read
+     * timeout, so a connection that stalls after its headers would block the body iterator forever.
+     * This is a backstop for that dead-stream case, set well above any live-but-slow generation (a
+     * reasoning model can think for minutes before its first token) so it only fires on a stream that
+     * is genuinely stuck, not merely quiet.
+     */
+    private val idleTimeoutNanos: Long = Duration.ofMinutes(5).toNanos()
+
+    /** How often the watchdog checks for stream activity. */
+    private val idlePollMillis: Long = 1_000L
 
     private fun request(path: String, body: String?, accept: String): HttpRequest {
         val b = HttpRequest.newBuilder(URI.create(base + path))
@@ -71,12 +85,34 @@ class Http(private val cfg: AppConfig) {
         }
         val lines = resp.body()
         token.attach(lines)
+        // A stalled stream has no per-read timeout in java.net.http, so a daemon watchdog closes the
+        // body after [idleTimeoutNanos] of silence. Closing it is the same unwind Stop already uses
+        // (token.attach above), so it turns an indefinite hang into an error the caller can report.
+        // It only fires when no event was delivered, never on a slow-but-live stream.
+        val lastActivity = AtomicLong(System.nanoTime())
+        val watchdog = Thread {
+            while (!Thread.currentThread().isInterrupted) {
+                if (System.nanoTime() - lastActivity.get() > idleTimeoutNanos) {
+                    runCatching { lines.close() }
+                    return@Thread
+                }
+                try {
+                    Thread.sleep(idlePollMillis)
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }
+        watchdog.isDaemon = true
+        watchdog.start()
         try {
             for (ev in SseFramer.frame(lines.asSequence())) {
+                lastActivity.set(System.nanoTime())
                 if (token.isCancelled) throw TurnCancelled()
                 yield(ev)
             }
         } finally {
+            watchdog.interrupt()
             runCatching { lines.close() }
         }
     }
