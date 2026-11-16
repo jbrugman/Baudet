@@ -68,6 +68,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
      */
     private val transcript = TranscriptView().apply {
         onApproval = { id, decision -> state.resolveApproval(id, decision) }
+        onLoadOlder = { loadOlder() }
     }
 
     private val input = JTextArea(4, 60).apply {
@@ -411,6 +412,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         // Prefer the persisted rows: a reload then rebuilds the cards, not just the prose.
         if (s.items.isNotEmpty()) transcript.rebuildItems(s.summary, s.items)
         else transcript.rebuild(s.summary, s.messages)
+        transcript.hasMoreOlder = s.hasMoreOlder
         status.foreground = BaudetPalette.dim
         status.text = statusLine()
         updateToolWarning()
@@ -468,6 +470,48 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
                     loading = false
                     status.foreground = BaudetPalette.error
                     status.text = e.message ?: "?"
+                }
+            }
+        }
+    }
+
+    /**
+     * Page in one older block when the reader reaches the head. It runs on [loadExecutor] like
+     * a conversation open and reuses [loading], so an older read never interleaves a turn's
+     * writes -- the same serial-store invariant as [loadSession]. The page is prepended on the
+     * EDT only if this is still the chosen conversation ([loadGeneration] unchanged); a switch
+     * in flight owns the loading flag, so a stale result is dropped without clearing it. The
+     * view holds its own viewport steady through [TranscriptView.olderReady]. A turn in flight
+     * or a load already running defers the request rather than racing it.
+     */
+    private fun loadOlder() {
+        if (busy || loading) {
+            transcript.olderLoadSkipped()
+            return
+        }
+        val gen = loadGeneration
+        val sessionId = state.session.sessionId
+        val beforeSeq = state.session.oldestLoadedSeq ?: run {
+            transcript.olderLoadSkipped()
+            return
+        }
+        loading = true
+        loadExecutor.execute {
+            try {
+                val w = state.loadOlderItems(sessionId, beforeSeq)
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    loading = false
+                    val s = state.session
+                    if (w.items.isNotEmpty()) s.items.addAll(0, w.items)
+                    s.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
+                    transcript.olderReady(s.summary, s.items, s.hasMoreOlder)
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    if (gen != loadGeneration) return@invokeLater
+                    loading = false
+                    transcript.olderLoadSkipped()
                 }
             }
         }

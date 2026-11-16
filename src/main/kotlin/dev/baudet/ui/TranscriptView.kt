@@ -196,6 +196,9 @@ class TranscriptView : JPanel(BorderLayout()) {
         /** How far above the bottom still counts as resting at the tail, in pixels. */
         private const val TAIL_SLACK = 24
 
+        /** How far below the head still asks for an older page, in pixels. */
+        private const val NEAR_TOP = 120
+
         /** Output lines a finished command shows before the rest is folded away. */
         private const val VISIBLE_LINES = 14
 
@@ -253,8 +256,46 @@ class TranscriptView : JPanel(BorderLayout()) {
      */
     var onApproval: (itemId: String, decision: ApprovalDecision) -> Unit = { _, _ -> }
 
+    /**
+     * Called when the reader reaches the head of what has been read and older rows remain in
+     * the store. The view owns only the trigger; deciding and reading belong to the host, which
+     * holds the store. Set by [ChatPanel] to a method that pages one older block in.
+     */
+    var onLoadOlder: (() -> Unit)? = null
+
+    /** Whether older rows remain to hand out; mirrors the host session's pending-older state. */
+    var hasMoreOlder = false
+
+    /** Holds one older load in flight at a time, so a scroll burst asks the host only once. */
+    private var awaitingOlder = false
+
+    /** The bar value and row-block height just before an older load, to hold the viewport steady. */
+    private var prevValue = 0
+    private var prevHeight = 0
+
     init {
         add(scroll, BorderLayout.CENTER)
+        scroll.verticalScrollBar.model.addChangeListener { maybeLoadOlder() }
+    }
+
+    /**
+     * Ask the host for one older page once the reader rests near the head of a scrolling view.
+     * The guard is deliberately loose -- a bar that scrolls at all and sits within [NEAR_TOP]
+     * of the top -- because rows added above the fold grow the content the reader was looking
+     * at, and [olderReady] re-adds that height so the view does not jump. [awaitingOlder] holds
+     * until the host answers with [olderReady] or [olderLoadSkipped], so one page loads at a
+     * time and a fresh open at the tail (value high) never fires it by accident.
+     */
+    private fun maybeLoadOlder() {
+        val host = onLoadOlder ?: return
+        if (!hasMoreOlder || awaitingOlder) return
+        val model = scroll.verticalScrollBar.model
+        if (model.maximum <= model.extent) return
+        if (model.value > NEAR_TOP) return
+        awaitingOlder = true
+        prevValue = model.value
+        prevHeight = rows.preferredSize.height
+        host()
     }
 
     /**
@@ -362,22 +403,61 @@ class TranscriptView : JPanel(BorderLayout()) {
      * shown. This is the reload path now that rows persist; [rebuild] is the fallback for a
      * conversation stored before rows were kept, which can only show prose.
      */
-    fun rebuildItems(summary: String?, items: List<Item>) {
+    fun rebuildItems(summary: String?, items: List<Item>) = rebuildInto(summary, items, followTail = true)
+
+    /**
+     * Replay stored rows into an empty transcript. [followTail] decides where the reader lands:
+     * true on an ordinary open, so the guard for an older load resets and the newest row shows;
+     * false when an older page was just prepended, where the host holds the viewport where it
+     * was instead (see [olderReady]).
+     */
+    private fun rebuildInto(summary: String?, items: List<Item>, followTail: Boolean) {
+        // A fresh open or a session switch begins a clean transcript: the older-load guard goes
+        // with the conversation it belonged to. The followTail=false path keeps it held, since
+        // it is mid-older-load and its deferred layout must not re-trigger before [olderReady]
+        // finishes placing the bar.
+        if (followTail) awaitingOlder = false
         open.clear()
         rows.removeAll()
         promptImage = false
         summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
-        items.forEach { item ->
-            started(item)
-            // A command card that recorded its decision replays it, so the verdict line returns.
-            if (item is CommandExecutionItem) item.approval?.let {
-                (open[item.itemId] as? ApprovalCapable)?.resolveApproval(it)
-            }
-            completed(item)
-        }
+        items.forEach { replayItem(it) }
         rows.revalidate()
         rows.repaint()
-        SwingUtilities.invokeLater { scrollToTail() }
+        if (followTail) SwingUtilities.invokeLater { scrollToTail() }
+    }
+
+    /** Replay one stored row through its start and completion, restoring a recorded verdict. */
+    private fun replayItem(item: Item) {
+        started(item)
+        // A command card that recorded its decision replays it, so the verdict line returns.
+        if (item is CommandExecutionItem) item.approval?.let {
+            (open[item.itemId] as? ApprovalCapable)?.resolveApproval(it)
+        }
+        completed(item)
+    }
+
+    /**
+     * Finish an older-page load: replay the now-longer list without following the tail, then
+     * push the bar down by the height that appeared above, so the row the reader was looking at
+     * stays put. [moreOlder] tells the view whether to keep offering older pages. It clears
+     * [awaitingOlder] only after placing the bar, so the deferred layout the rebuild schedules
+     * cannot fire another load with the bar still parked at the head.
+     */
+    fun olderReady(summary: String?, items: List<Item>, moreOlder: Boolean) {
+        rebuildInto(summary, items, followTail = false)
+        val delta = rows.preferredSize.height - prevHeight
+        hasMoreOlder = moreOlder
+        SwingUtilities.invokeLater {
+            val bar = scroll.verticalScrollBar
+            bar.value = (prevValue + delta).coerceAtMost(bar.maximum)
+            awaitingOlder = false
+        }
+    }
+
+    /** The host had nothing to load after this view asked; release the guard so a later scroll retries. */
+    fun olderLoadSkipped() {
+        awaitingOlder = false
     }
 
     /**

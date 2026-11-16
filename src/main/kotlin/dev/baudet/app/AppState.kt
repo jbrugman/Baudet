@@ -20,6 +20,7 @@ import dev.baudet.session.Msg
 import dev.baudet.session.SessionIds
 import dev.baudet.session.SessionState
 import dev.baudet.store.H2Store
+import dev.baudet.store.ItemWindow
 import dev.baudet.store.SessionSummary
 import dev.baudet.thread.ApprovalDecision
 import dev.baudet.thread.ApprovalRequest
@@ -958,6 +959,16 @@ class AppState(val store: H2Store) {
      * restart: the older turns are already gone after a compaction, so losing only the
      * summary would drop that context for good.
      */
+    /**
+     * Read one older page of a conversation for the scroll path, stopping just before
+     * [beforeSeq] and bounded at [ITEMS_PAGE_SIZE]. Read-only and store-only, so a worker can
+     * run it while the UI thread keeps showing the rows it already holds; the caller prepends
+     * the page and moves the cursor. Distinct from [ensureItemsLoaded], which the write gate
+     * uses to pull every page synchronously before a rewrite.
+     */
+    fun loadOlderItems(sessionId: String, beforeSeq: Int): ItemWindow =
+        store.itemsWindow(sessionId, ITEMS_PAGE_SIZE, beforeSeq)
+
     /**
      * Bring [SessionState.items] back to the full transcript before it is written out.
      * A conversation may have opened on only its newest page, but [persistTo] rewrites every
