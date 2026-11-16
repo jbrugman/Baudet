@@ -190,7 +190,9 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = msgs.toMutableList()
         )
-        session.items += store.items(id)
+        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
+        session.items += w.items
+        session.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
         session.summary = store.summaryOf(id)
         session.projectId = store.projectOfSession(id)
     }
@@ -304,7 +306,9 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
-        s.items += store.items(id)
+        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
+        s.items += w.items
+        s.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
         s.summary = store.summaryOf(id)
         s.projectId = store.projectOfSession(id)
         return s
@@ -954,7 +958,29 @@ class AppState(val store: H2Store) {
      * restart: the older turns are already gone after a compaction, so losing only the
      * summary would drop that context for good.
      */
+    /**
+     * Bring [SessionState.items] back to the full transcript before it is written out.
+     * A conversation may have opened on only its newest page, but [persistTo] rewrites every
+     * stored row from [SessionState.items]; writing that partial view would delete the older rows
+     * it never read. Loading every still-missing older page first, oldest toward the tail, keeps the
+     * single whole-rewrite safe. It runs on whichever worker is about to write, so its reads join
+     * the same serial store use as the turn's own writes. A no-op once the whole transcript is held.
+     */
+    private fun ensureItemsLoaded(s: SessionState) {
+        if (!s.hasMoreOlder) return
+        while (true) {
+            val w = store.itemsWindow(s.sessionId, ITEMS_PAGE_SIZE, beforeSeq = s.oldestLoadedSeq)
+            if (w.items.isNotEmpty()) s.items.addAll(0, w.items)
+            if (!w.hasMoreOlder) {
+                s.oldestLoadedSeq = null
+                break
+            }
+            s.oldestLoadedSeq = w.olderSeq
+        }
+    }
+
     private fun persistTo(s: SessionState) {
+        ensureItemsLoaded(s)
         store.rewriteMessages(s.sessionId, s.messages)
         store.rewriteItems(s.sessionId, s.items)
         store.upsertSession(
@@ -993,6 +1019,8 @@ class AppState(val store: H2Store) {
          * machine can act on a higher [AppConfig.maxParallelTurns].
          */
         private const val MAX_SAFE_PARALLEL = 1
+        /** How many transcript rows a conversation opens on; older pages load on scroll. */
+        private const val ITEMS_PAGE_SIZE = 200
         /**
          * Room held back between the model's stated window and what we treat as usable. A window is
          * the total the backend counts, and a request that lands exactly on it is still refused, so

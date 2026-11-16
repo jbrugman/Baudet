@@ -18,6 +18,15 @@ class SessionState(
      * compaction trims the model context in [messages] but never this audit trail.
      */
     val items: MutableList<Item> = mutableListOf()
+    /**
+     * The store sequence number of the oldest row currently in [items], or null when [items] already
+     * reaches the start of the conversation. Non-null means older rows exist that this view has not
+     * read yet; the app clears it before any write rewrites the rows, so a partial read is never
+     * what gets persisted back.
+     */
+    var oldestLoadedSeq: Int? = null
+    /** Whether the store still holds rows older than [items]. */
+    val hasMoreOlder: Boolean get() = (oldestLoadedSeq ?: 0) > 0
     /** Summary after compaction; replaces the older turns in the prompt. */
     var summary: String? = null
 
