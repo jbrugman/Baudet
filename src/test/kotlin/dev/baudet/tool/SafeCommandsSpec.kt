@@ -219,6 +219,13 @@ class SafeCommandsSpec : BehaviorSpec({
             "git clean -fd", "git reset --hard", "git log --output=x", "git -c x=y status",
             // a chain whose weakest segment writes, and absolute-path programs, are never family-trusted
             "pwd && rm -rf x", "git diff | rm -f x", "/usr/bin/ls",
+            // a writer or exec trampoline is never family-trusted by name: one Always on a benign run
+            // must not let a later rewording write out of folder (tee) or run anything (xargs/env)
+            "echo x | tee build.log", "echo key | tee /home/me/.ssh/authorized_keys",
+            "touch x", "mkdir out", "install a b", "ln -s a b", "patch -p1", "echo rm | xargs rm", "env ls",
+            // archive/compression writers place an output file wherever their argument points, so a
+            // stored family key on the bare name would cover a later run writing out of the folder
+            "tar czf out.tgz .", "gzip notes.txt", "zip out.zip a", "bzip2 f", "cpio -o",
             // nothing to key on
             "", "   "
         )

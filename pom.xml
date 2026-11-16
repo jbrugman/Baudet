@@ -6,7 +6,7 @@
 
   <groupId>dev.baudet</groupId>
   <artifactId>baudet</artifactId>
-  <version>0.9.1-SNAPSHOT</version>
+  <version>0.9.2-SNAPSHOT</version>
   <packaging>jar</packaging>
   <name>baudet</name>
 
@@ -130,6 +130,13 @@
           <includes>
             <include>**/*Spec.*</include>
           </includes>
+          <!-- The UI-near specs assert pure layout math and never touch a real frame or the
+               event-dispatch thread, which is why they pass on the displayless CI runner. Pinning
+               headless makes that contract explicit: a future spec that reaches for a JFrame would
+               fail fast here instead of passing only on a developer's machine and then breaking CI. -->
+          <systemPropertyVariables>
+            <java.awt.headless>true</java.awt.headless>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
 
@@ -163,6 +170,7 @@
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>${mainClass}</mainClass>
                 </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
               <filters>
                 <filter>
