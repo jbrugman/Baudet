@@ -409,6 +409,11 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
     fun refresh() {
         resetThinking()
         val s = state.session
+        // Set the wrap mode before the first row is built. Leaving it to [applyWrap] after the
+        // rebuild let the fold change row heights beneath a scroll the rebuild had already issued,
+        // which is what landed the open above the newest row; building at the right wrap makes the
+        // tail landing match what the reader then sees.
+        transcript.wrap = state.config.transcriptWrap
         // Prefer the persisted rows: a reload then rebuilds the cards, not just the prose.
         if (s.items.isNotEmpty()) transcript.rebuildItems(s.summary, s.items)
         else transcript.rebuild(s.summary, s.messages)
@@ -704,6 +709,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
             // overflow gets, so the user knows the way out rather than a bare reason token.
             val label = when {
                 reason == "context_limit" -> Texts[Key.ContextOverflow]
+                reason == "empty" -> Texts[Key.EmptyTurn]
                 reason != null -> Texts.fmt(Key.Truncated, reason)
                 else -> Texts[Key.TruncatedUnknown]
             }

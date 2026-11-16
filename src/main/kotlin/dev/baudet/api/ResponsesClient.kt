@@ -39,6 +39,20 @@ class ResponsesClient(private val cfg: AppConfig) {
             put("store", false)
             put("max_output_tokens", maxTokens)
             put("temperature", 0.2)
+            // The fold deletes text, so it must not lose its summary to hidden thinking. A reasoning
+            // model spends max_output_tokens on reasoning first and can leave the content channel
+            // empty, which acceptsSummary then refuses as "empty". A summary is mechanical, so this
+            // call always asks for it without reasoning. The ask is unconditional and NOT gated on
+            // cfg.reasoningEffort: that field defaults to null, and a reasoning-by-default backend
+            // (gpt-5 class) thinks even when it is unset -- exactly the case that comes back empty.
+            // Gating on it skipped the fix in precisely the setup that needs it.
+            put("reasoning", buildJsonObject { put("effort", "none") })
+            // effort=none is not enough for the local backends this app targets: oMLX/vLLM keep a
+            // thinking-by-default chat template, so Qwen still spends the budget on hidden reasoning
+            // and returns an empty content channel -- the exact "nothing was compacted" the fold
+            // reported. chat_template_kwargs is where those servers actually disable it (verified on
+            // the resident model: reasoning emptied, summary content returned in full).
+            put("chat_template_kwargs", buildJsonObject { put("enable_thinking", false) })
             put("input", buildJsonArray {
                 addJsonObject { put("role", "user"); put("content", userText) }
             })

@@ -272,5 +272,34 @@ class ExecuteToolSpec : BehaviorSpec({
                 Files.notExists(root.resolve("proof.txt")) shouldBe true
             }
         }
+        `when`("a pipeline of a trusted family varies its text") {
+            // The nag this removes: one Always on a pipeline must silence every reworded variation of it,
+            // exactly as a developer expects from a tool like Codex. The family covers the chain's shape,
+            // so a different flag or argument on the same pipeline runs without a prompt.
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, trustedCommands = { setOf("echo | cat") }
+            )
+            then("it runs, because the whole pipeline family was trusted even though the text differs") {
+                val result = tool.execute(commandArgs("echo piped ok | cat"), ctx)
+                result.ok shouldBe true
+                result.output shouldContain "piped ok"
+                result.output shouldContain "exit code: 0"
+            }
+        }
+        `when`("a pipeline whose trusted head carries an untrusted tail") {
+            // The family is only as safe as its weakest segment: a blocklisted tail strips the whole
+            // chain's family, so a trusted head can never pull a destructive second stage through it.
+            val ctx = ToolContext(
+                root, writeGranted = false, approve = { _, _ -> false }, execGranted = true,
+                approveCommand = { _, _, _ -> false }, trustedCommands = { setOf("echo | cat") }
+            )
+            then("it is declined, because the blocklisted tail denies the whole chain its family") {
+                val result = tool.execute(commandArgs("echo hi | rm -f proof.txt"), ctx)
+                result.ok shouldBe false
+                result.output shouldContain "declined"
+                Files.notExists(root.resolve("proof.txt")) shouldBe true
+            }
+        }
     }
 })

@@ -98,6 +98,9 @@ fun main(args: Array<String>) {
                     clampedDivider(layout.right, state.config.rightDivider),
                     clampedDivider(layout.files.changesSplit, state.config.filesDivider)
                 )
+                // Stop any MCP server this app launched before the process ends, so a child never
+                // outlives its parent and is left running without anyone to answer its approvals.
+                state.closeMcp()
             }
         })
 

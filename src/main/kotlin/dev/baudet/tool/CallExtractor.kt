@@ -29,16 +29,16 @@ fun interface CallExtractor {
          * backend that does native function calling ignores the fenced shape but still
          * benefits from the read-before-edit rule and the same accurate tool list.
          */
-        fun protocolFor(enabled: Set<String>): String {
+        fun protocolFor(enabled: Set<String>, extra: List<ExtraTool> = emptyList()): String {
             val canEdit = "edit_file" in enabled
             val canRun = "run_command" in enabled
             val canGit = "git" in enabled
-            val advertised = buildList {
-                add("read_file")
-                if (canEdit) add("edit_file")
-                if (canRun) add("run_command")
-                if (canGit) add("git")
-            }
+            val advertised = ArrayList<String>()
+            advertised.add("read_file")
+            if (canEdit) advertised.add("edit_file")
+            if (canRun) advertised.add("run_command")
+            if (canGit) advertised.add("git")
+            extra.forEach { advertised.add(it.name) }
             return buildString {
                 append("You can act on the project only through the tools below, and only with ")
                 append("the exact format shown. The only tools available to you are: ")
@@ -67,6 +67,21 @@ fun interface CallExtractor {
                     append("  {\"tool\": \"git\", \"arguments\": {\"command\": \"status\"}}\n\n")
                 }
 
+                extra.forEach { tool ->
+                    append("You may also call an external MCP tool, named and shaped exactly as below; ")
+                    append("use its advertised name and an arguments object that matches its schema:")
+                    append('\n')
+                    append("  {\"tool\": \"")
+                    append(tool.name)
+                    append("\", \"arguments\": <object matching ")
+                    append(tool.parameters)
+                    append(">}")
+                    append('\n')
+                    append("   Purpose: ")
+                    append(tool.description)
+                    append('\n')
+                    append('\n')
+                }
                 append("Prose may come before or after a block. Each call returns an observation ")
                 append("that says ok true or ok false; read it before acting again. On ok false, ")
                 append("do not send the same call again unchanged; fix the arguments or answer ")
@@ -80,4 +95,13 @@ fun interface CallExtractor {
             }
         }
     }
+
+    /**
+     * An extra, non-builtin tool -- an MCP tool -- that the prompted protocol must advertise so the
+     * model can call it. The invariant is that the prompt names exactly the registry's set, so a
+     * tool the loop has must appear here too; [parameters] is that tool's JSON schema as text, since
+     * a prompted (non-native) backend gets no schema from the request body and must read it from the
+     * prompt to call the tool correctly.
+     */
+    data class ExtraTool(val name: String, val description: String, val parameters: String)
 }

@@ -1,5 +1,6 @@
 package dev.baudet.ui
 
+import dev.baudet.BuildInfo
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
 import java.awt.BorderLayout
@@ -63,10 +64,23 @@ object AboutDialog {
             border = BorderFactory.createEmptyBorder(4, 8, 4, 8)
             add(close)
         }
+        // The exact version this binary was built from, kept out of the localized body so it needs
+        // no translation and always matches the jar that is actually running, never a remembered one.
+        val buildText = if (BuildInfo.built.isNotBlank())
+            Texts.fmt(Key.AboutVersionBuilt, BuildInfo.version, BuildInfo.built)
+        else
+            Texts.fmt(Key.AboutVersion, BuildInfo.version)
+        val buildLine = javax.swing.JLabel(buildText).apply {
+            foreground = Color(0x9a, 0x9a, 0x9a)
+            border = BorderFactory.createEmptyBorder(6, 10, 0, 10)
+        }
 
         dialog.contentPane = JPanel(BorderLayout()).apply {
             add(scroll, BorderLayout.CENTER)
-            add(buttons, BorderLayout.SOUTH)
+            add(JPanel(BorderLayout()).apply {
+                add(buildLine, BorderLayout.NORTH)
+                add(buttons, BorderLayout.SOUTH)
+            }, BorderLayout.SOUTH)
         }
         dialog.pack()
         dialog.isLocationByPlatform = false

@@ -1,6 +1,14 @@
 package dev.baudet.tool
 
 /**
+ * One picture a tool returned, carried as raw base64 with its MIME type. It is kept out of
+ * [ToolResult.output] on purpose: that string goes back to the model, and a megabyte of base64
+ * there would crowd the context out without telling the model anything it can act on. The bytes
+ * belong to the transcript row (see `ImageItem`), which is where a human actually looks at them.
+ */
+data class ToolImage(val mimeType: String, val base64: String)
+
+/**
  * What a tool run hands back. [output] is model-facing and stays English (it is
  * fed straight to the model); [diff] is the human-facing unified preview shown
  * beside the approval prompt and only present when there is one; [undo] reverts a
@@ -20,5 +28,6 @@ data class ToolResult(
     val exitCode: Int? = null,
     val timedOut: Boolean = false,
     val durationMs: Long = 0L,
-    val cwd: String? = null
+    val cwd: String? = null,
+    val images: List<ToolImage> = emptyList()
 )

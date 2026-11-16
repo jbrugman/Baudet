@@ -21,12 +21,26 @@ class SessionState(
     /**
      * The store sequence number of the oldest row currently in [items], or null when [items] already
      * reaches the start of the conversation. Non-null means older rows exist that this view has not
-     * read yet; the app clears it before any write rewrites the rows, so a partial read is never
-     * what gets persisted back.
+     * read yet. Writes append only the new tail, so a partially loaded view never pulls those
+     * older rows back -- they stay untouched in the store until the scroll path asks for them.
      */
     var oldestLoadedSeq: Int? = null
     /** Whether the store still holds rows older than [items]. */
     val hasMoreOlder: Boolean get() = (oldestLoadedSeq ?: 0) > 0
+    /**
+     * How many of this conversation's model-context turns are already rows in the store. The
+     * store is the source of truth and grows by append; this view mirrors it and tracks the
+     * boundary so [persistTo] writes only the newer tail rather than rewriting every row. It is
+     * set from the full read on open and from a rewrite only when compaction renumbers the head.
+     */
+    var persistedMessages: Int = 0
+    /**
+     * The itemId of the newest transcript row already in the store, or null when none is. The
+     * item trail is append-only, so persisting appends the rows after this marker rather than
+     * rewriting the trail. Searched by [List.indexOfLast], so prepending an older page mid-turn
+     * (which adds only already-stored rows) leaves the boundary at the genuine newest row.
+     */
+    var persistedItemsTailId: String? = null
     /** Summary after compaction; replaces the older turns in the prompt. */
     var summary: String? = null
 

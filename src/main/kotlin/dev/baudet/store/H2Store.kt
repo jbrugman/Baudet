@@ -168,6 +168,36 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
         }
     }
 
+    override fun appendMessages(sessionId: String, fromSeq: Int, msgs: List<Msg>) {
+        if (msgs.isEmpty()) return
+        val auto = db.autoCommit
+        db.autoCommit = false
+        try {
+            db.prepareStatement(
+                "INSERT INTO messages(session_id, seq, role, content, response_id, prompt_tokens) " +
+                    "VALUES(?, ?, ?, ?, ?, ?)"
+            ).use { ps ->
+                msgs.forEachIndexed { offset, m ->
+                    ps.setString(1, sessionId)
+                    ps.setInt(2, fromSeq + offset)
+                    ps.setString(3, m.role)
+                    ps.setString(4, m.content)
+                    ps.setString(5, m.responseId)
+                    if (m.promptTokens == null) ps.setNull(6, java.sql.Types.BIGINT)
+                    else ps.setLong(6, m.promptTokens)
+                    ps.addBatch()
+                }
+                ps.executeBatch()
+            }
+            db.commit()
+        } catch (e: Exception) {
+            db.rollback()
+            throw e
+        } finally {
+            db.autoCommit = auto
+        }
+    }
+
     override fun items(sessionId: String): List<Item> =
         db.prepareStatement(
             "SELECT payload FROM items WHERE session_id = ? ORDER BY seq"
@@ -240,6 +270,37 @@ class H2Store(dir: java.nio.file.Path) : SettingsStore, TranscriptStore, Project
                 items.forEachIndexed { i, item ->
                     ps.setString(1, sessionId)
                     ps.setInt(2, i)
+                    ps.setString(3, dev.baudet.api.json.encodeToString(Item.serializer(), item))
+                    ps.addBatch()
+                }
+                ps.executeBatch()
+            }
+            db.commit()
+        } catch (e: Exception) {
+            db.rollback()
+            throw e
+        } finally {
+            db.autoCommit = auto
+        }
+    }
+
+    override fun appendItems(sessionId: String, items: List<Item>) {
+        if (items.isEmpty()) return
+        val auto = db.autoCommit
+        db.autoCommit = false
+        try {
+            val next = db.prepareStatement(
+                "SELECT COALESCE(MAX(seq), -1) + 1 FROM items WHERE session_id = ?"
+            ).use { ps ->
+                ps.setString(1, sessionId)
+                ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+            }
+            db.prepareStatement(
+                "INSERT INTO items(session_id, seq, payload) VALUES(?, ?, ?)"
+            ).use { ps ->
+                items.forEachIndexed { offset, item ->
+                    ps.setString(1, sessionId)
+                    ps.setInt(2, next + offset)
                     ps.setString(3, dev.baudet.api.json.encodeToString(Item.serializer(), item))
                     ps.addBatch()
                 }

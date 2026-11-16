@@ -6,11 +6,14 @@ import dev.baudet.api.ModelWindows
 import dev.baudet.api.ModelGateway
 import dev.baudet.api.ResponsesGateway
 import dev.baudet.api.Turn
+import dev.baudet.api.json
 import dev.baudet.config.AppConfig
 import dev.baudet.config.ContextStrategy
 import dev.baudet.config.ToolMode
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
+import dev.baudet.mcp.McpServerConfig
+import dev.baudet.mcp.McpServers
 import dev.baudet.project.FolderPermission
 import dev.baudet.project.Project
 import dev.baudet.session.CompactionOutcome
@@ -52,7 +55,17 @@ import java.nio.file.Paths
  */
 class AppState(val store: H2Store) {
 
-    var config: AppConfig = store.load() ?: AppConfig()
+    /** The stored profile as it was before any migration; null means a fresh install that never saved one. */
+    private val storedConfig: AppConfig? = store.load()
+
+    var config: AppConfig = storedConfig ?: AppConfig()
+
+    /**
+     * The live MCP clients, owned here so their lifecycle (connect lazily, reconcile against config,
+     * tear down at close) sits with the turn that uses them rather than in the UI. A fresh manager has
+     * no clients: nothing launches until a turn builds its tools against a non-empty [AppConfig.mcpServers].
+     */
+    val mcpServers = McpServers()
 
     /**
      * Builds the transport for one turn. It is a factory rather than a single instance so
@@ -176,26 +189,27 @@ class AppState(val store: H2Store) {
     var currentProjectId: String? = null
 
     init {
+        // The app deliberately opens on a fresh, empty conversation: the most recent session is
+        // NOT auto-loaded at startup. A user reaches an earlier conversation on purpose through
+        // the sidebar (loadSession), never as a side effect of launching the app.
         Texts.language = Texts.parse(config.language)
-        restoreLatest()
+        migrateSafeReadsDefault()
     }
 
-    /** Loads the most recent conversation so context survives a restart. */
-    private fun restoreLatest() {
-        val id = store.latestSessionId(1).firstOrNull() ?: return
-        val msgs = store.messages(id)
-        if (msgs.isEmpty()) return
-        session = SessionState(
-            sessionId = id,
-            model = store.model(id) ?: config.model,
-            previousResponseId = store.previousResponseId(id),
-            messages = msgs.toMutableList()
-        )
-        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
-        session.items += w.items
-        session.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
-        session.summary = store.summaryOf(id)
-        session.projectId = store.projectOfSession(id)
+    /**
+     * One-time migration for the safe-read default. An existing profile was written while
+     * [AppConfig.autoApproveSafeCommands] defaulted to off, so its saved value still says false even though
+     * the fresh-install default is now on (Codex parity). On the first open after that change this flips the
+     * one saved profile to on and records [AppConfig.autoApproveSafeMigrated], so the user is not nagged
+     * without lifting a finger. A brand-new install never stored a profile, so it is left alone (it already
+     * defaults to on, and nothing is written before the user changes anything); a profile whose marker is
+     * already set -- by this migration or by a later [saveConfig] -- is never touched again, which is what
+     * keeps a deliberate opt-out in Settings durable.
+     */
+    private fun migrateSafeReadsDefault() {
+        if (storedConfig == null || config.autoApproveSafeMigrated) return
+        config = config.copy(autoApproveSafeCommands = true, autoApproveSafeMigrated = true)
+        store.save(config)
     }
 
     /**
@@ -205,11 +219,14 @@ class AppState(val store: H2Store) {
     var onConfigSaved: (AppConfig) -> Unit = {}
 
     fun saveConfig(next: AppConfig) {
-        config = next
-        store.save(next)
-        session.model = next.model
-        Texts.language = Texts.parse(next.language)
-        onConfigSaved(next)
+        // Saving a config also stamps the safe-read migration as done: a profile that opted out of
+        // auto-approving safe reads after the flip is then never re-flipped by [migrateSafeReadsDefault].
+        val settled = next.copy(autoApproveSafeMigrated = true)
+        config = settled
+        store.save(settled)
+        session.model = settled.model
+        Texts.language = Texts.parse(settled.language)
+        onConfigSaved(settled)
     }
 
     /**
@@ -307,11 +324,15 @@ class AppState(val store: H2Store) {
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
-        val w = store.itemsWindow(id, ITEMS_PAGE_SIZE)
+        val w = store.itemsWindow(id, INITIAL_ITEMS_PAGE)
         s.items += w.items
         s.oldestLoadedSeq = if (w.hasMoreOlder) w.olderSeq else null
         s.summary = store.summaryOf(id)
         s.projectId = store.projectOfSession(id)
+        // The store already holds exactly this view; record the boundary so [persistTo] appends
+        // only what a turn adds instead of rewriting every row.
+        s.persistedMessages = s.messages.size
+        s.persistedItemsTailId = s.items.lastOrNull()?.itemId
         return s
     }
 
@@ -441,6 +462,95 @@ class AppState(val store: H2Store) {
         }
         if (cleared) store.save(config)
     }
+
+    /**
+     * The MCP servers allowed to run without a prompt, copied under the same lock
+     * [allowMcpServerAlways] writes under: an "always" taken on a card during a live turn must count on
+     * that turn's next call, read afresh through [ToolContext.mcpAllowServers], and copying the list
+     * mid-add is what turns a permission into a crash.
+     */
+    fun allowedMcpServers(): Set<String> =
+        synchronized(config.mcpAllowServers) { config.mcpAllowServers.toSet() }
+
+    /**
+     * Pin a whole MCP server to the always-allow list and persist it, so its tools run without a prompt
+     * from now on -- including the turn now running, since [allowedMcpServers] is read on every call.
+     * Stored by server id, the same key a grant is read under, so it holds as long as the user keeps that
+     * id stable. Persists with [H2Store.save] alone rather than [saveConfig], mirroring [allowCommandAlways]:
+     * an allow-list change must not rebuild the panels for something a running turn reads on its next call.
+     */
+    fun allowMcpServerAlways(id: String) {
+        var changed = false
+        synchronized(config.mcpAllowServers) {
+            if (id !in config.mcpAllowServers) { config.mcpAllowServers.add(id); changed = true }
+        }
+        if (changed) store.save(config)
+    }
+
+    /** Drop every always-allowed MCP server; persists without firing [onConfigSaved]. */
+    fun clearMcpAllowServers() {
+        var cleared = false
+        synchronized(config.mcpAllowServers) {
+            if (config.mcpAllowServers.isNotEmpty()) { config.mcpAllowServers.clear(); cleared = true }
+        }
+        if (cleared) store.save(config)
+    }
+
+    /**
+     * Replace the always-allowed MCP server ids with the ones typed in Settings, so a grant no longer
+     * depends on catching the "always" button on a live card. Each non-blank line is one id; an id that
+     * names no configured server is dropped rather than trusted -- a grant that could never match is
+     * dead weight at best -- and the count is reported so the panel can say so. Duplicates collapse.
+     * Stored by id under the same lock [allowedMcpServers] reads on every call, so a new grant counts
+     * on the turn now running. Persists with [H2Store.save] alone, like [allowMcpServerAlways].
+     */
+    fun replaceMcpAllowServers(lines: List<String>): Int {
+        val configured = synchronized(config.mcpServers) { config.mcpServers.map { it.id }.toSet() }
+        val next = LinkedHashSet<String>()
+        var dropped = 0
+        for (raw in lines) {
+            val id = raw.trim()
+            if (id.isEmpty()) continue
+            if (id in configured) next.add(id) else dropped++
+        }
+        var changed = false
+        synchronized(config.mcpAllowServers) {
+            if (config.mcpAllowServers.toSet() != next.toSet()) {
+                config.mcpAllowServers.clear(); config.mcpAllowServers.addAll(next); changed = true
+            }
+        }
+        if (changed) store.save(config)
+        return dropped
+    }
+
+    /**
+     * Replace the MCP servers with the configs parsed from the given lines, each a single JSON object. A
+     * line that will not parse, names no id or command, or repeats an id already taken is dropped rather
+     * than trusted; order is kept. Nothing launches or stops here -- [McpServers] reconciles the live set
+     * on the next turn -- so editing a server is safe while a turn runs. Returns how many lines were
+     * dropped, so the UI can report them. Persists like [allowMcpServerAlways], without firing [onConfigSaved].
+     */
+    fun replaceMcpServers(lines: List<String>): Int {
+        val kept = ArrayList<McpServerConfig>()
+        val seen = HashSet<String>()
+        var dropped = 0
+        for (raw in lines) {
+            val cfg = runCatching { json.decodeFromString(McpServerConfig.serializer(), raw) }.getOrNull()
+            if (cfg == null || cfg.id.isBlank() || cfg.command.isBlank() || cfg.id in seen) { dropped++; continue }
+            seen.add(cfg.id); kept.add(cfg)
+        }
+        synchronized(config.mcpServers) {
+            config.mcpServers.clear(); config.mcpServers.addAll(kept)
+        }
+        store.save(config)
+        return dropped
+    }
+
+    /** The ids of MCP servers connected right now, for the Settings panel to report. */
+    fun connectedMcp(): Set<String> = mcpServers.connected()
+
+    /** Tear down every live MCP server. Called once as the app closes, so a child process never outlives it. */
+    fun closeMcp() = mcpServers.closeAll()
 
     /** Delete a project and every conversation inside it; files on disk are never touched. */
     fun deleteProject(id: String) {
@@ -640,11 +750,17 @@ class AppState(val store: H2Store) {
      * the request builder drops system messages, which would silently lose it after a
      * compaction. Model-facing, so English whatever the UI language is.
      */
-    private fun instructionsFor(s: SessionState): String {
+    private fun instructionsFor(s: SessionState, truncated: Boolean): String {
         val summary = s.summary
         val base = config.resolvedSystemPrompt()
-        return if (summary == null) base
+        var out = if (summary == null) base
         else base + "\n\nSummary of the earlier conversation:\n" + summary
+        // When the head of the conversation did not make it into this request -- a fold left only a
+        // summary, or trimming rolled older turns off the window -- tell the model, so it signals
+        // lost context instead of silently re-announcing a stale plan from the summary the way a
+        // weak local model otherwise does. Codex does the same: it says it lost the thread.
+        if (summary != null || truncated) out += "\n\n" + CONTEXT_LOSS_NOTE
+        return out
     }
 
     /** Whether a turn enters the loop; true exactly when [toolGate] is [ToolGate.Active]. */
@@ -763,16 +879,18 @@ class AppState(val store: H2Store) {
         // precedes it is replayed -- sent once, not twice, and scrubbed. Under a trimming strategy the
         // window was already bounded by outbound, so it is split without the fixed replay clamp that
         // would otherwise undo it; under StopAtLimit the transcript goes whole and the old clamp holds.
+        val window = outbound(s, shrinkPct)
+        val truncated = window.size < s.promptHistory().size
         val (prior, prompt) =
-            if (config.contextStrategy == ContextStrategy.StopAtLimit) Transcript.forCall(outbound(s, shrinkPct))
-            else Transcript.splitForWindow(outbound(s, shrinkPct))
+            if (config.contextStrategy == ContextStrategy.StopAtLimit) Transcript.forCall(window)
+            else Transcript.splitForWindow(window)
         val streamed = StringBuilder()
         sink.replyStarted()
         val onText: (String) -> Unit = { chunk -> streamed.append(chunk); sink.textDelta(chunk); onDelta(chunk) }
         val onAside: (String) -> Unit = { chunk -> sink.reasoningDelta(chunk); onReasoning(chunk) }
         val turn = try {
             gatewayFactory(config).turn(
-                system = instructionsFor(s),
+                system = instructionsFor(s, truncated),
                 history = prior,
                 userText = prompt,
                 previousResponseId = prev,
@@ -853,7 +971,18 @@ class AppState(val store: H2Store) {
             readGranted = readGranted,
             autoAllow = { allowedCommands() },
             autoApproveSafe = config.autoApproveSafeCommands,
-            trustedCommands = { trustedCommands() }
+            trustedCommands = { trustedCommands() },
+            // An external MCP server runs only what the human lets it: a standing grant skips the
+            // prompt, otherwise the tool's own card asks once, and "always" pins the whole server for
+            // the rest of the app -- the same three answers a command offers, read afresh each call.
+            mcpAllowServers = { allowedMcpServers() },
+            approveMcp = { sid, tool, args ->
+                when (requestApproval(emitter, token, ApprovalRequest.McpTool(sid, tool, args))) {
+                    ApprovalDecision.Accept -> true
+                    ApprovalDecision.AcceptForSession -> { allowMcpServerAlways(sid); true }
+                    else -> false
+                }
+            }
         )
         // Build the enabled tools once, then advertise exactly those in the prompt: the registry
         // and the system prompt must name the same set, or the model is taught to call a tool it
@@ -866,8 +995,19 @@ class AppState(val store: H2Store) {
             // git is offered whenever Read is granted; its write verbs appear only when the user switched
             // git writes on AND this folder grants Write, so a switch never reaches past the folder's rights.
             if (readGranted) add(GitTool(writesAllowed = config.gitAllowWrites && writable))
+            // External MCP tools join the registry only when the user opted a server in and it came up;
+            // a server that will not start contributes nothing here, so the model never sees a tool it
+            // cannot call. The config is snapshotted under its lock so an edit mid-call cannot corrupt
+            // this iteration while the Settings panel applies a new line.
+            addAll(mcpServers.tools(synchronized(config.mcpServers) { config.mcpServers.toList() }))
         }
-        val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
+        // A prompted backend reads an external tool's shape from the prompt, not the request body -- the
+        // built-ins do not need this, being fixed -- so each MCP tool's schema is advertised alongside it.
+        val extras = tools.filter { it.name.startsWith("mcp__") }
+            .map { CallExtractor.ExtraTool(it.name, it.description, it.parameters.toString()) }
+        val window = outbound(s, shrinkPct)
+        val truncated = window.size < s.promptHistory().size
+        val system = instructionsFor(s, truncated) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet(), extras)
         val loop = ToolLoop(
             // The source is given the same strategy and budget this turn opened with, so every
             // request the loop fires -- not only the first -- is capped to the configured budget
@@ -889,7 +1029,7 @@ class AppState(val store: H2Store) {
         val onText: (String) -> Unit = { chunk -> streamed.append(chunk); onDelta(chunk) }
         val outcome = try {
             loop.run(
-                history = outbound(s, shrinkPct),
+                history = window,
                 previousResponseId = chainedPrev(s),
                 ctx = context,
                 onDelta = onText,
@@ -911,9 +1051,14 @@ class AppState(val store: H2Store) {
         if (outcome.responseId != null) s.previousResponseId = outcome.responseId
         return when (outcome) {
             is LoopOutcome.Completed ->
-                if (outcome.capReached && outcome.finalTurn.incompleteReason == null)
-                    outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
-                else outcome.finalTurn
+                when {
+                    outcome.finalTurn.incompleteReason != null -> outcome.finalTurn
+                    outcome.capReached -> outcome.finalTurn.copy(incompleteReason = "stopped_after_tool_cap")
+                    // A turn that reasoned and then answered with nothing, after the loop's own
+                    // blank retries: flag it so the UI says so instead of silent status counts.
+                    outcome.finalTurn.text.isBlank() -> outcome.finalTurn.copy(incompleteReason = "empty")
+                    else -> outcome.finalTurn
+                }
             is LoopOutcome.CapReached -> Turn(
                 text = "",
                 responseId = outcome.responseId,
@@ -945,6 +1090,12 @@ class AppState(val store: H2Store) {
                     Compactor.SUMMARY_SYSTEM_PROMPT, source, Compactor.summaryTokens(window), delta
                 )
             }.compact(session, keepLast, onDelta)
+            // A fold is the one place the head is cut and message seqs renumber, so the append
+            // boundary cannot hold: rewrite the message rows once and re-anchor the watermark.
+            if (s is CompactionOutcome.Compacted) {
+                store.rewriteMessages(session.sessionId, session.messages)
+                session.persistedMessages = session.messages.size
+            }
             persist()
             return s
         } finally {
@@ -963,37 +1114,32 @@ class AppState(val store: H2Store) {
      * Read one older page of a conversation for the scroll path, stopping just before
      * [beforeSeq] and bounded at [ITEMS_PAGE_SIZE]. Read-only and store-only, so a worker can
      * run it while the UI thread keeps showing the rows it already holds; the caller prepends
-     * the page and moves the cursor. Distinct from [ensureItemsLoaded], which the write gate
-     * uses to pull every page synchronously before a rewrite.
+     * the page and moves the cursor. Writes append only the new tail, so a partially loaded
+     * view never has to pull the older pages it has not shown.
      */
     fun loadOlderItems(sessionId: String, beforeSeq: Int): ItemWindow =
         store.itemsWindow(sessionId, ITEMS_PAGE_SIZE, beforeSeq)
 
-    /**
-     * Bring [SessionState.items] back to the full transcript before it is written out.
-     * A conversation may have opened on only its newest page, but [persistTo] rewrites every
-     * stored row from [SessionState.items]; writing that partial view would delete the older rows
-     * it never read. Loading every still-missing older page first, oldest toward the tail, keeps the
-     * single whole-rewrite safe. It runs on whichever worker is about to write, so its reads join
-     * the same serial store use as the turn's own writes. A no-op once the whole transcript is held.
-     */
-    private fun ensureItemsLoaded(s: SessionState) {
-        if (!s.hasMoreOlder) return
-        while (true) {
-            val w = store.itemsWindow(s.sessionId, ITEMS_PAGE_SIZE, beforeSeq = s.oldestLoadedSeq)
-            if (w.items.isNotEmpty()) s.items.addAll(0, w.items)
-            if (!w.hasMoreOlder) {
-                s.oldestLoadedSeq = null
-                break
-            }
-            s.oldestLoadedSeq = w.olderSeq
-        }
-    }
-
     private fun persistTo(s: SessionState) {
-        ensureItemsLoaded(s)
-        store.rewriteMessages(s.sessionId, s.messages)
-        store.rewriteItems(s.sessionId, s.items)
+        // Messages only grow at the tail between persistences (compaction is the lone head-cut and
+        // it rewrites + re-anchors before calling here), so append the newer tail only.
+        if (s.messages.size > s.persistedMessages) {
+            store.appendMessages(
+                s.sessionId, s.persistedMessages,
+                s.messages.subList(s.persistedMessages, s.messages.size).toList()
+            )
+            s.persistedMessages = s.messages.size
+        }
+        // The item trail is append-only; find the newest already-stored row and append what came
+        // after it. indexOfLast lands on the genuine tail even after an older page is prepended.
+        val start = s.items.indexOfLast { it.itemId == s.persistedItemsTailId }
+        val newItems =
+            if (start >= 0) s.items.subList(start + 1, s.items.size).toList()
+            else s.items.toList()
+        if (newItems.isNotEmpty()) {
+            store.appendItems(s.sessionId, newItems)
+            s.persistedItemsTailId = s.items.lastOrNull()?.itemId
+        }
         store.upsertSession(
             s.sessionId, s.model, s.previousResponseId, s.messages.size, s.projectId, s.summary
         )
@@ -1030,8 +1176,20 @@ class AppState(val store: H2Store) {
          * machine can act on a higher [AppConfig.maxParallelTurns].
          */
         private const val MAX_SAFE_PARALLEL = 1
-        /** How many transcript rows a conversation opens on; older pages load on scroll. */
-        private const val ITEMS_PAGE_SIZE = 200
+        /**
+         * Handed to the model whenever earlier turns were dropped or summarized, so it reports
+         * losing the thread instead of quietly reopening a task that is no longer in its context.
+         * Model-facing, so English whatever the UI language is.
+         */
+        private const val CONTEXT_LOSS_NOTE =
+            "Earlier turns were dropped from this request; a summary may stand in for them. Treat " +
+            "that summary as background only, never as a live plan: do not reopen or re-announce a " +
+            "task you cannot confirm in the recent messages above. If a task you began earlier is " +
+            "no longer visible, say you have lost the thread and ask, instead of silently acting on it."
+        /** How many rows a conversation opens on -- small, so the first paint is instant. */
+        private const val INITIAL_ITEMS_PAGE = 10
+        /** How many older rows each scroll-up page brings; larger than the open, still cheap. */
+        private const val ITEMS_PAGE_SIZE = 20
         /**
          * Room held back between the model's stated window and what we treat as usable. A window is
          * the total the backend counts, and a request that lands exactly on it is still refused, so

@@ -1,5 +1,6 @@
 package dev.baudet.config
 
+import dev.baudet.mcp.McpServerConfig
 import kotlinx.serialization.Serializable
 
 /**
@@ -102,11 +103,20 @@ data class AppConfig(
      */
     var autoAllowCommands: MutableList<String> = mutableListOf(),
     /**
-     * Opt-in: auto-approve commands [dev.baudet.tool.SafeCommands] recognises as plainly read-only
-     * (a single simple command like ls, cat or git status). Default off, so a fresh install still
-     * asks for every command; the user turns it on deliberately to stop being nagged over harmless ones.
+     * Auto-approve commands [dev.baudet.tool.SafeCommands] recognises as plainly read-only (a single
+     * simple command like ls, cat or git status), the way a coding tool like Codex runs a read without
+     * a prompt. Default on for that parity; the recognizer still refuses a chain, a redirect or a write,
+     * and the user can switch it off in Settings to be asked for every command again.
      */
-    var autoApproveSafeCommands: Boolean = false,
+    var autoApproveSafeCommands: Boolean = true,
+    /**
+     * Records that the one-time safe-read default migration already ran for this profile, so it is never
+     * applied twice. An older profile stored the value while it defaulted to off; [dev.baudet.app.AppState]
+     * flips that one saved profile to the new on-default at first open, then sets this marker -- via the
+     * migration itself or via any later [dev.baudet.app.AppState.saveConfig] -- so a user who deliberately
+     * switched safe reads back off afterwards is never overwritten again.
+     */
+    var autoApproveSafeMigrated: Boolean = false,
     /**
      * Command families the user chose to trust, each a bare program (mvn) or a git program and
      * subcommand (git commit). A single simple command runs without a prompt when its family key, as
@@ -174,7 +184,21 @@ data class AppConfig(
      * reject it. Zero means never learned.
      */
     var learnedContextWindow: Int = 0,
-    var learnedContextKey: String = ""
+    var learnedContextKey: String = "",
+
+    /**
+     * The MCP servers the user opted into, each a local command Baudet launches as a tool source. There
+     * is no default: a fresh install runs zero servers, because an MCP server is arbitrary local code.
+     * This rides in the single-row JSON blob like every other setting, so adding or editing one touches
+     * no schema. [dev.baudet.mcp.McpServers] connects them lazily on the first tool turn.
+     */
+    var mcpServers: MutableList<McpServerConfig> = mutableListOf(),
+    /**
+     * Server ids the user chose to always allow, so that server's tools run without a per-call prompt.
+     * Off by empty; a server never listed here still asks on every call, mirroring how a command only
+     * skips its prompt once pinned in [autoAllowCommands].
+     */
+    var mcpAllowServers: MutableList<String> = mutableListOf()
 ) {
     /** Key resolution: UI input wins, then the environment. Never hardcoded. */
     fun resolvedApiKey(): String =

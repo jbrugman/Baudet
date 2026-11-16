@@ -41,15 +41,19 @@ class AppStateItemSpec : BehaviorSpec({
             then("reasoning is never captured into the rows") {
                 state.session.items.any { it is ReasoningItem } shouldBe false
             }
-            then("a fresh AppState over the same store reloads the same rows") {
+            then("a fresh AppState opens on no rows, then reloads the same rows on purpose") {
                 val reloaded = AppState(store)
+                (reloaded.session.items.isEmpty()) shouldBe true
+                reloaded.loadSession(state.session.sessionId)
                 reloaded.session.items.map { it.kind } shouldBe listOf(
                     ItemKind.UserMessage,
                     ItemKind.AgentMessage
                 )
             }
             then("the reloaded answer carries its finished text") {
-                val answer = AppState(store).session.items.filterIsInstance<AgentMessageItem>().single()
+                val reopened = AppState(store)
+                reopened.loadSession(state.session.sessionId)
+                val answer = reopened.session.items.filterIsInstance<AgentMessageItem>().single()
                 answer.text shouldBe "here you go"
             }
         }
@@ -63,15 +67,19 @@ class AppStateItemSpec : BehaviorSpec({
         state.loadSession(id)
         `when`("it reopens on just its newest page") {
             then("one page is held while the store keeps the older rows") {
-                state.session.items.size shouldBe 200
+                state.session.items.size shouldBe 10
                 state.session.hasMoreOlder shouldBe true
                 store.items(id).size shouldBe 250
             }
-            then("a write reloads the older rows first, so none are lost") {
+            then("a write appends the tail only, so older rows are neither reloaded nor lost") {
                 state.persist()
+                // There is no new tail to append here, so the store keeps every row it held: the
+                // 240 older rows this view never read are untouched, not rewritten away.
                 store.items(id).size shouldBe 250
-                state.session.items.size shouldBe 250
-                state.session.hasMoreOlder shouldBe false
+                // And the view stays partial rather than pulling those rows back -- dropping that
+                // forced full read is the whole point of replacing the per-turn rewrite with append.
+                state.session.items.size shouldBe 10
+                state.session.hasMoreOlder shouldBe true
             }
         }
     }

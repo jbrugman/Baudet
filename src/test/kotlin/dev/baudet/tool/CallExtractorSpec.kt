@@ -47,4 +47,26 @@ class CallExtractorSpec : BehaviorSpec({
             }
         }
     }
+
+    given("a turn that also exposes an external MCP tool") {
+        // A prompted backend gets no schema from the request body, so the protocol must carry the MCP
+        // tool's namespaced name, its purpose and its schema, or the model cannot call it correctly.
+        val extras = listOf(
+            CallExtractor.ExtraTool(
+                name = "mcp__srv__greet",
+                description = "Greet someone by name.",
+                parameters = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}"
+            )
+        )
+        val protocol = CallExtractor.protocolFor(setOf("read_file"), extras)
+        `when`("reading the advertised tools") {
+            then("it lists the external tool by its namespaced name") {
+                protocol shouldContain "\"mcp__srv__greet\""
+            }
+            then("it shows the purpose and the schema a prompted model needs to shape the call") {
+                protocol shouldContain "Greet someone by name."
+                protocol shouldContain "\"name\""
+            }
+        }
+    }
 })

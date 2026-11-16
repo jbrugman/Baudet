@@ -11,6 +11,7 @@ import dev.baudet.thread.ApprovalResolved
 import dev.baudet.thread.CommandExecutionItem
 import dev.baudet.thread.ErrorItem
 import dev.baudet.thread.FileChangeItem
+import dev.baudet.thread.ImageItem
 import dev.baudet.thread.Item
 import dev.baudet.thread.ItemCompleted
 import dev.baudet.thread.ItemDelta
@@ -28,12 +29,18 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Image
 import java.awt.Insets
 import java.awt.Rectangle
+import java.io.ByteArrayInputStream
+import java.util.Base64
+import javax.imageio.ImageIO
 import javax.swing.BorderFactory
+import javax.swing.ImageIcon
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JFileChooser
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -41,6 +48,7 @@ import javax.swing.JTextPane
 import javax.swing.Scrollable
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 import javax.swing.text.DefaultStyledDocument
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
@@ -204,6 +212,12 @@ class TranscriptView : JPanel(BorderLayout()) {
 
         private const val COLLAPSE_ARROW = "\u25b8"
         private const val EXPAND_ARROW = "\u25be"
+
+        /** Widest an inline tool image is drawn, in pixels. Never upscaled past this. */
+        private const val MAX_IMAGE_WIDTH = 640
+
+        /** Streaming repaints merge to roughly one per frame, in milliseconds (~30 fps). */
+        private const val RELAYOUT_MS = 33
     }
 
     /**
@@ -320,6 +334,7 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
     private val dim = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.dim) }
     private val error = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.error) }
+    private val warn = SimpleAttributeSet(normal).apply { StyleConstants.setForeground(this, BaudetPalette.warn) }
     private val bold = SimpleAttributeSet(normal).apply { StyleConstants.setBold(this, true) }
     private val italic = SimpleAttributeSet(normal).apply { StyleConstants.setItalic(this, true) }
     private val heading = SimpleAttributeSet(bold).apply { StyleConstants.setFontSize(this, 15) }
@@ -420,9 +435,24 @@ class TranscriptView : JPanel(BorderLayout()) {
         open.clear()
         rows.removeAll()
         promptImage = false
-        summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
-        items.forEach { replayItem(it) }
+        firstContentIndex = if (summary != null) 1 else 0
+        renderedItems = items.size
+        bulkAdd = true
+        try {
+            summary?.let { rows.add(noteRow(Texts.fmt(Key.SummaryBanner, it.length))) }
+            items.forEach { replayItem(it) }
+        } finally {
+            bulkAdd = false
+        }
         rows.revalidate()
+        if (followTail) {
+            // Lay out synchronously and land the tail before the first paint. Deferring only the
+            // scroll let the EDT paint the head first and then jump down once layout settled -- the
+            // visible half-second hitch. Validating now makes the very first frame already sit at the
+            // newest row; the deferred retry is a fallback for a view not measured on first show yet.
+            scroll.validate()
+            scrollToTail()
+        }
         rows.repaint()
         if (followTail) SwingUtilities.invokeLater { scrollToTail() }
     }
@@ -438,17 +468,39 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
 
     /**
-     * Finish an older-page load: replay the now-longer list without following the tail, then
-     * push the bar down by the height that appeared above, so the row the reader was looking at
-     * stays put. [moreOlder] tells the view whether to keep offering older pages. It clears
-     * [awaitingOlder] only after placing the bar, so the deferred layout the rebuild schedules
-     * cannot fire another load with the bar still parked at the head.
+     * Finish an older-page load without rebuilding. Only the rows for the page the host just
+     * prepended are inserted at the head; the rows already shown are left as they were. The bar is
+     * then pushed down by the height that appeared above, so the row the reader was looking at stays
+     * put. [moreOlder] tells the view whether to keep offering older pages. [awaitingOlder] clears
+     * only after placing the bar, so the deferred layout cannot fire another load with the bar still
+     * parked at the head.
      */
     fun olderReady(summary: String?, items: List<Item>, moreOlder: Boolean) {
-        rebuildInto(summary, items, followTail = false)
-        val delta = rows.preferredSize.height - prevHeight
+        // The host already prepended the just-read page to [items]; the rows for that page are the
+        // only ones added here -- inserted at the head, with the rows already shown left untouched.
+        // Replaying the whole list on every page is what froze the app on a long transcript.
+        val newCount = items.size - renderedItems
+        if (newCount <= 0) {
+            hasMoreOlder = moreOlder
+            awaitingOlder = false
+            return
+        }
+        // The page sits at the head of [items], oldest first, exactly as the store returned it.
+        val page = items.take(newCount)
+        bulkAdd = true
+        pendingInsertAt = firstContentIndex
+        try {
+            page.forEach { replayItem(it) }
+        } finally {
+            bulkAdd = false
+            pendingInsertAt = null
+        }
+        renderedItems = items.size
         hasMoreOlder = moreOlder
+        val delta = rows.preferredSize.height - prevHeight
         SwingUtilities.invokeLater {
+            // Lay the prepended rows out before nudging the bar, or the shift reads a stale height.
+            scroll.validate()
             val bar = scroll.verticalScrollBar
             bar.value = (prevValue + delta).coerceAtMost(bar.maximum)
             awaitingOlder = false
@@ -494,6 +546,8 @@ class TranscriptView : JPanel(BorderLayout()) {
             is CommandExecutionItem -> put(item.itemId, CommandRow(item))
             is FileChangeItem -> put(item.itemId, ChangeRow(item))
             is ToolCallItem -> put(item.itemId, ToolRow(item))
+            // An image is complete the moment it arrives (bytes, not a stream): a one-shot row.
+            is ImageItem -> addRow(imageRow(item))
             is PlanItem -> put(item.itemId, PlanRow(item))
             is ErrorItem -> put(item.itemId, errorRow(item.message))
             // Reasoning has a dock of its own above the composer; it is not a row on purpose.
@@ -518,8 +572,9 @@ class TranscriptView : JPanel(BorderLayout()) {
             is FileChangeItem -> close(item.itemId)?.let { (it as ChangeRow).finish(item) }
             is ToolCallItem -> close(item.itemId)?.let { (it as ToolRow).finish(item) }
             is PlanItem -> close(item.itemId)?.let { (it as PlanRow).finish(item) }
-            // A prompt row is complete as it is written, and an error row carries its one message.
-            is UserMessageItem, is ErrorItem -> Unit
+            // A prompt row is complete as it is written, an error row carries its one message, and
+            // an image row is already whole from the moment [started] added it.
+            is UserMessageItem, is ErrorItem, is ImageItem -> Unit
             is ReasoningItem -> Unit
         }
     }
@@ -549,6 +604,18 @@ class TranscriptView : JPanel(BorderLayout()) {
     }
 
     private fun addRow(row: JComponent) {
+        // During a bulk rebuild the host drives one layout pass for the whole batch, so skip the
+        // per-row revalidate/repaint/scroll that live streaming relies on.
+        if (bulkAdd) {
+            val at = pendingInsertAt
+            if (at != null) {
+                rows.add(row, at)
+                pendingInsertAt = at + 1
+            } else {
+                rows.add(row)
+            }
+            return
+        }
         val follow = atTail()
         rows.add(row)
         rows.revalidate()
@@ -557,13 +624,65 @@ class TranscriptView : JPanel(BorderLayout()) {
         if (follow) SwingUtilities.invokeLater { scrollToTail() }
     }
 
-    /** Append to a row's own document, following the tail only when the reader was already there. */
+    /**
+     * Whether a streamed row still owes its visual pass. Set by every chunk and cleared by
+     * [relayoutTimer]. Touched only on the event dispatch thread, exactly like the writes that
+     * set it, so it needs no lock.
+     */
+    private var dirtyRelayout = false
+
+    /**
+     * Set while [rebuildInto] replays a stored page: [addRow] then only appends and leaves the
+     * single layout pass to the rebuild itself. Opening a thread or scrolling through a long one
+     * therefore pays one revalidate per page instead of one per row, which is what made a big
+     * transcript hang. The live streaming path never sets it, so streamed chunks still coalesce
+     * through [relayoutTimer] exactly as before.
+     */
+    private var bulkAdd = false
+
+    /**
+     * The number of [Item]s this view currently holds a row for, oldest first. A prepend computes
+     * the just-loaded page as `items.size - renderedItems`, so an older page adds only its own rows
+     * without replaying those already on screen. Reset by [rebuildInto].
+     */
+    private var renderedItems = 0
+
+    /** The index in [rows] where item rows begin -- past the optional summary banner. Older pages
+     *  insert here, so the banner never moves and older rows never land above it. */
+    private var firstContentIndex = 0
+
+    /**
+     * Set only during an older-page prepend: [addRow] then inserts at this running index (and
+     * advances it) instead of appending. Null everywhere else, so the live stream and a fresh build
+     * keep appending exactly as before.
+     */
+    private var pendingInsertAt: Int? = null
+
+    /**
+     * The one visual pass shared by every streamed write. Inserting a chunk into a row's document
+     * is cheap; revalidating and repainting the whole row stack is not, and paying it per chunk is
+     * what made a long transcript crawl as it grew. Chunks insert at once and merely flag this
+     * dirty; the timer repaints at most once a frame and stops on its first idle tick, so an idle
+     * transcript leaves nothing scheduled.
+     */
+    private val relayoutTimer = Timer(RELAYOUT_MS) { e ->
+        if (dirtyRelayout) {
+            dirtyRelayout = false
+            rows.revalidate()
+            rows.repaint()
+            // Commit to following now, then scroll after the layout pass, once the bar's maximum
+            // reflects the height the chunks just added.
+            if (atTail()) SwingUtilities.invokeLater { scrollToTail() }
+        } else {
+            (e.source as Timer).stop()
+        }
+    }.apply { setCoalesce(true) }
+
+    /** Append to a row's own document; the costly visual pass is coalesced into [relayoutTimer]. */
     private fun write(doc: DefaultStyledDocument, text: String, attrs: SimpleAttributeSet) {
-        val follow = atTail()
         doc.insertString(doc.length, text, attrs)
-        rows.revalidate()
-        rows.repaint()
-        if (follow) SwingUtilities.invokeLater { scrollToTail() }
+        dirtyRelayout = true
+        if (!relayoutTimer.isRunning) relayoutTimer.start()
     }
 
     /**
@@ -608,6 +727,85 @@ class TranscriptView : JPanel(BorderLayout()) {
         write(body.styledDocument as DefaultStyledDocument, text + "\n", dim)
     }
 
+    /**
+     * A picture a tool returned, shown inline the way the app-server shows a returned image. It is
+     * scaled down to [MAX_IMAGE_WIDTH] but never up: upscaling invents pixels the tool never made,
+     * and honest accounting is the reason this app exists. A picture whose bytes will not decode
+     * degrades to a caption naming why rather than throwing, so one bad frame cannot take the
+     * transcript down -- and it says "unreadable" rather than drawing nothing in silence.
+     */
+    private fun imageRow(item: ImageItem): Row = Row(card = true).apply {
+        val caption = textPane()
+        write(caption.styledDocument as DefaultStyledDocument,
+            Texts.fmt(Key.ImageGenerated, item.tool) + "\n", dim)
+        add(caption, BorderLayout.NORTH)
+        // The exact bytes the tool returned are decoded once and kept: the same array feeds both the
+        // preview and the save, so what lands on disk is what the server sent, never a re-encode.
+        val rawBytes = runCatching { Base64.getDecoder().decode(item.base64) }.getOrNull()
+        val decoded = rawBytes?.let { runCatching { ImageIO.read(ByteArrayInputStream(it)) }.getOrNull() }
+        if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
+            val note = textPane()
+            write(note.styledDocument as DefaultStyledDocument, Texts[Key.ImageUnreadable] + "\n", error)
+            add(note, BorderLayout.CENTER)
+        } else {
+            val w: Int
+            val h: Int
+            if (decoded.width > MAX_IMAGE_WIDTH) {
+                w = MAX_IMAGE_WIDTH
+                h = (MAX_IMAGE_WIDTH.toDouble() * decoded.height / decoded.width).toInt().coerceAtLeast(1)
+            } else {
+                w = decoded.width
+                h = decoded.height
+            }
+            // Left-aligned, never centered: in scroll mode (wrap off) the card can sit inside a wider
+            // view, and a centered picture would drift away from the caption and the text above it.
+            val pic = JLabel(ImageIcon(decoded.getScaledInstance(w, h, Image.SCALE_SMOOTH)))
+            pic.horizontalAlignment = SwingConstants.LEFT
+            add(pic, BorderLayout.CENTER)
+            rawBytes?.let { add(imageSaveBar(item, it, caption), BorderLayout.SOUTH) }
+        }
+    }
+
+    /** The save strip under a returned image: one button, writing the original bytes where the human picks. */
+    private fun imageSaveBar(item: ImageItem, rawBytes: ByteArray, caption: JTextPane): JPanel =
+        JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+            isOpaque = false
+            add(JButton(Texts[Key.SaveImage]).apply {
+                font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                addActionListener { saveImage(item, rawBytes, caption) }
+            })
+        }
+
+    /**
+     * Write the decoded bytes to a file the human chooses, then report the outcome on the caption:
+     * a faint line naming where it went, or an honest failure rather than silence. An overwrite is the
+     * chooser's to confirm, never ours to assume.
+     */
+    private fun saveImage(item: ImageItem, rawBytes: ByteArray, caption: JTextPane) {
+        val chooser = JFileChooser().apply {
+            dialogTitle = Texts[Key.SaveImage]
+            selectedFile = java.io.File(defaultImageName(item.mimeType))
+        }
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return
+        val target = chooser.selectedFile
+        val saved = runCatching { java.nio.file.Files.write(target.toPath(), rawBytes) }
+        val doc = caption.styledDocument as DefaultStyledDocument
+        if (saved.isSuccess)
+            write(doc, " " + Texts.fmt(Key.ImageSavedTo, target.absolutePath) + "\n", dim)
+        else
+            write(doc, " " + Texts[Key.ImageSaveFailed] + "\n", error)
+    }
+
+    /** A safe default file name for a returned image, with the extension its MIME type implies. */
+    private fun defaultImageName(mimeType: String): String {
+        val subtype = mimeType.substringAfter('/', "")
+        val ext = when (subtype) {
+            "", "jpeg", "pjpeg" -> if (subtype == "") "png" else "jpg"
+            else -> subtype
+        }
+        return "baudet-image-${System.currentTimeMillis()}.$ext"
+    }
+
     private fun errorRow(text: String): Row = Row().apply {
         val body = textPane()
         add(body, BorderLayout.CENTER)
@@ -648,19 +846,38 @@ class TranscriptView : JPanel(BorderLayout()) {
                 Key.ApplyPatch to ApprovalDecision.Accept,
                 Key.DenyButton to ApprovalDecision.Decline
             )
+            // An external MCP tool can be granted for this call or for its whole server, exactly as a
+            // command can be run once or pinned; there is no middle answer, so the bar mirrors RunCommand.
+            is ApprovalRequest.McpTool -> listOf(
+                Key.AllowOnce to ApprovalDecision.Accept,
+                Key.AlwaysAllow to ApprovalDecision.AcceptForSession,
+                Key.DenyButton to ApprovalDecision.Decline
+            )
         }
-        return JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+        // The prompt and the buttons must both stay reachable at any width. A single FlowLayout put a
+        // long MCP heading and the three buttons on one line, and a Row caps itself to one line of
+        // height, so the wrapped buttons fell off the right edge and could not be clicked -- the human
+        // saw only the first. The prompt therefore wraps through the same textPane the bodies use, and
+        // the buttons keep their own line below it, so Allow / Always / Deny are all within reach.
+        return JPanel(BorderLayout()).apply {
             isOpaque = false
-            add(JLabel(Texts[Key.ApprovalWaiting]).apply {
-                foreground = BaudetPalette.warn
-                font = Font(Font.MONOSPACED, Font.PLAIN, 11)
-            })
-            choices.forEach { (key, decision) ->
-                add(JButton(Texts[key]).apply {
-                    font = Font(Font.MONOSPACED, Font.PLAIN, 11)
-                    addActionListener { onApproval(itemId, decision) }
-                })
-            }
+            // A command and a patch already name themselves in their row; an MCP tool does not, so its
+            // card says which server and tool it is before the human decides.
+            val prompt = textPane()
+            if (request is ApprovalRequest.McpTool)
+                write(prompt.styledDocument as DefaultStyledDocument,
+                    Texts.fmt(Key.ApprovalMcpHeading, request.serverId, request.tool) + " ", warn)
+            write(prompt.styledDocument as DefaultStyledDocument, Texts[Key.ApprovalWaiting] + "\n", warn)
+            add(prompt, BorderLayout.NORTH)
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+                isOpaque = false
+                choices.forEach { (key, decision) ->
+                    add(JButton(Texts[key]).apply {
+                        font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                        addActionListener { onApproval(itemId, decision) }
+                    })
+                }
+            }, BorderLayout.SOUTH)
         }
     }
 

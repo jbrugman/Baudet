@@ -6,7 +6,7 @@
 
   <groupId>dev.baudet</groupId>
   <artifactId>baudet</artifactId>
-  <version>0.9.0-SNAPSHOT</version>
+  <version>0.9.1-SNAPSHOT</version>
   <packaging>jar</packaging>
   <name>baudet</name>
 
@@ -27,6 +27,7 @@
     <kotest.version>6.2.7</kotest.version>
     <surefire.version>3.6.1</surefire.version>
     <mainClass>dev.baudet.MainKt</mainClass>
+    <maven.build.timestamp.format>yyyy-MM-dd HH:mm</maven.build.timestamp.format>
   </properties>
 
   <dependencies>
@@ -72,6 +73,14 @@
   <build>
     <sourceDirectory>src/main/kotlin</sourceDirectory>
     <testSourceDirectory>src/test/kotlin</testSourceDirectory>
+    <resources>
+      <!-- Filtering lets baudet-build.properties carry the real pom version and build time, so
+           the About box can never show a number that drifted from what actually shipped. -->
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

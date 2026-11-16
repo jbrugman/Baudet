@@ -122,10 +122,10 @@ class CompactionPlanSpec : BehaviorSpec({
     /**
      * The shape of a session that actually gets stranded: one enormous tool observation as the
      * oldest turn, in a conversation already past the backend's window. foldBatch takes it -- a
-     * fold that refuses to take a turn can never finish -- and the caller keeps such an oversized
-     * turn verbatim rather than sending it cut, because the cut tail would never reach the model
-     * while the whole turn got cleared once its summary was accepted. This pins the turn arriving
-     * whole, held back for a call that can carry it, never halving the fold.
+     * fold that refuses to take a turn can never finish -- and the caller then folds that oversized
+     * turn across consecutive calls so every piece reaches the model, never clearing a piece it did
+     * not read. This pins that foldBatch takes the whole oversized turn, never halving it, because
+     * the chunked fold slices the very text the model reads, so it must start from the turn intact.
      */
     given("a stranded session whose oldest turn is a 400k character tool observation") {
         val huge = Msg("tool", "O".repeat(400_000))
@@ -134,6 +134,28 @@ class CompactionPlanSpec : BehaviorSpec({
             then("the fold takes it, so the fold cannot stall on an oversized turn") {
                 batch.size shouldBe 1
                 rest shouldBe emptyList()
+            }
+        }
+    }
+
+    /**
+     * The fold reads one oversized turn in pieces, so it needs to know how much content still fits
+     * beside a carried summary. [contentRoom] charges the same cost as [foldBatch] does a turn --
+     * the carried-summary wrapper plus the "role: " prefix and the trailing blank line -- so a slice
+     * measured here cannot overflow the call it is poured into, which is what keeps the chunked
+     * fold lossless. A zero is the caller's cue to stop, never to send an empty slice.
+     */
+    given("the room left for one turn's content beside a carried summary") {
+        `when`("measuring it against the ceiling") {
+            then("a carried summary and the role both cost their share, matching foldBatch") {
+                // summary 1000 reserves 1021 with the wrapper; the role "tool" is 4; allowance 4.
+                CompactionPlan.contentRoom(1_000, 4, 5_000) shouldBe 5_000 - 1_021 - 4 - 4
+            }
+            then("no carried summary reserves only the role and its blank line") {
+                CompactionPlan.contentRoom(0, 4, 5_000) shouldBe 5_000 - 4 - 4
+            }
+            then("it floors at zero, so the caller stops instead of sending an empty slice") {
+                CompactionPlan.contentRoom(5_000, 4, 5_000) shouldBe 0
             }
         }
     }

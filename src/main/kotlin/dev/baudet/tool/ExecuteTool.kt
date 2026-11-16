@@ -51,6 +51,15 @@ class ExecuteTool : Tool {
         put("required", buildJsonArray { add("command") })
     }
 
+    /**
+     * A command fans out only on the exact route the run itself trusts without a person: [SafeCommands]
+     * proves it read-only and the safe gate is on, so it neither writes nor parks a thread waiting on
+     * a click. A pinned or family-trusted command is deliberately left serial -- its trust can cover a
+     * write, which two concurrent runs must not race.
+     */
+    override fun canRunParallel(args: JsonObject, ctx: ToolContext): Boolean =
+        ctx.autoApproveSafe && args.str("command")?.let(SafeCommands::isSafe) == true
+
     override fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
         if (!ctx.execGranted) return fail("the project does not grant the Execute right")
 

@@ -28,6 +28,52 @@ object SafeCommands {
         '*', '?', '!', '#', '~', '\n', '\r'
     )
 
+    /**
+     * Shell syntax that must never earn a family grant, even for a chain: a redirect, a substitution,
+     * a glob, a brace, a newline (a second command) or a comment. Unlike [UNSAFE_CHARS] this deliberately
+     * omits the segment separators `;`, `|` and `&`, because [trustedKey] now lets a chain of otherwise
+     * safe segments be family-trusted; every other metacharacter still refuses a family outright. The
+     * read-only auto-run gate [isSafe] keeps the wider [UNSAFE_CHARS], so a chain is still never auto-run.
+     */
+    private val NON_SEGMENT_UNSAFE = charArrayOf(
+        '<', '>', '$', '(', ')', '{', '}', '\\', '`',
+        '*', '?', '!', '#', '~', '\n', '\r'
+    )
+
+    /**
+     * The characters bash still expands inside double quotes: a substitution, a backtick, a backslash or
+     * a history flag. A single-quoted run is fully literal and needs none of these, so a metacharacter
+     * quoted with single quotes carries no shell meaning and is no longer refused on that character.
+     */
+    private val DQ_ACTIVE = charArrayOf('$', '`', '\\', '!')
+
+    /**
+     * Whether [s] holds one of [unsafe] where bash would read it as syntax: a single-quoted run is skipped
+     * whole (bash treats it as literal), and inside a double-quoted run only the characters bash still
+     * expands there ([DQ_ACTIVE]) count, with a backslash escaping the next. A metacharacter outside any
+     * quote is read as syntax and refused. An unbalanced quote is treated as unsafe, the conservative
+     * direction for a gate whose dangerous failure is a wrong safe verdict.
+     */
+    private fun hasUnsafeOutsideQuotes(s: String, unsafe: CharArray): Boolean {
+        var i = 0
+        var quote: Char? = null
+        while (i < s.length) {
+            val c = s[i]
+            when {
+                quote == '\'' -> if (c == '\'') quote = null
+                quote == '"' -> when {
+                    c == '\\' -> i++
+                    c == '"' -> quote = null
+                    c in DQ_ACTIVE && c in unsafe -> return true
+                }
+                c == '\'' || c == '"' -> quote = c
+                c in unsafe -> return true
+            }
+            i++
+        }
+        return quote != null
+    }
+
     /** Single commands that can read; each is then cleared or condemned by its flags in [DENY_FLAGS]. */
     private val READ_ONLY = setOf(
         "ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "find", "sort", "uniq",
@@ -120,6 +166,8 @@ object SafeCommands {
     fun isSafe(command: String): Boolean {
         val trimmed = command.trim()
         if (trimmed.isEmpty()) return false
+        // The read-only auto-run gate reads the raw string, so a metacharacter hidden inside a quote
+        // is still refused (grep 'a; rm' is never auto-run). Quote-awareness belongs to trustedKey alone.
         if (trimmed.any { it in UNSAFE_CHARS }) return false
         val tokens = trimmed.split(Regex("\\s+"))
         val program = tokens.first()
@@ -141,19 +189,44 @@ object SafeCommands {
      * is the bare program, or git plus its subcommand, so one decision covers the repeated build or
      * commit that only differs in its message or flags -- which is exactly the nag a developer feels.
      *
-     * A key is withheld for a shell metacharacter (a chain or redirect is never family-trusted), a
-     * newline, a program [isFamilyTrustedProgram] will not vouch for, a name on [BLOCKLIST], a git
-     * subcommand on [GIT_UNSAFE_TRUST_SUBCOMMANDS], or any
-     * invocation that carries one of its write, exec or escape flags. That last rule is why trusting
-     * sort, find or uniq cannot auto-write, and why trusting git cannot smuggle --output or -c: they
-     * lose their key exactly when they stop being a read. The check mirrors [isSafe] but is not gated by
-     * [READ_ONLY], because here the human, not the gate, is the one vouching for the program.
+     * A chain of segments joined by `&&`, `||`, `|`, `;` or `&` earns a family too, so one Always ends
+     * the repetition for a pipeline like `git diff ... | tail ...` over every reworded variation, the
+     * way a developer expects. But that family is only as safe as its weakest segment: the command is
+     * split on the separators outside quotes, and the whole chain is refused a family if ANY segment is
+     * not itself family-trusted. So a key is withheld for a redirect, substitution or glob, a newline, a
+     * program [isFamilyTrustedProgram] will not vouch for, a name on [BLOCKLIST] in any segment, a git
+     * subcommand on [GIT_UNSAFE_TRUST_SUBCOMMANDS] in any segment, or any segment that carries one of its
+     * write, exec or escape flags. That is why trusting `git diff | tail` cannot smuggle `| rm -rf` or
+     * `--output`: the offending segment loses the key for the whole chain. The check mirrors [isSafe] but
+     * is not gated by [READ_ONLY], because here the human, not the gate, is the one vouching for the
+     * program. The read-only auto-run gate [isSafe] is untouched, so a chain is still never auto-run.
      */
     fun trustedKey(command: String): String? {
         val canonical = command.trim().replace(Regex("[ \\t]+"), " ")
         if (canonical.isEmpty()) return null
-        if (canonical.any { it in UNSAFE_CHARS }) return null
-        val tokens = canonical.split(Regex("\\s+"))
+        if (hasUnsafeOutsideQuotes(canonical, NON_SEGMENT_UNSAFE)) return null
+        val (segments, operators) = splitTopLevel(canonical) ?: return null
+        val keys = ArrayList<String>(segments.size)
+        for (segment in segments) {
+            keys.add(singleFamilyKey(segment) ?: return null)
+        }
+        if (keys.size == 1) return keys[0]
+        val joined = StringBuilder(keys[0])
+        for (i in operators.indices) {
+            joined.append(' ').append(operators[i]).append(' ').append(keys[i + 1])
+        }
+        return joined.toString()
+    }
+
+    /**
+     * The family key for one already-separator-free [segment]: the bare program, or git plus its
+     * subcommand, only when the program may be vouched for and carries no write, exec or escape flag.
+     * Null when any of those fail. This is the single-command rule [trustedKey] applies to every segment
+     * of a chain, so a chain is trusted only when each of its parts would be trusted alone.
+     */
+    private fun singleFamilyKey(segment: String): String? {
+        if (segment.isBlank()) return null
+        val tokens = segment.split(Regex("\\s+"))
         val program = tokens.first()
         if (!isFamilyTrustedProgram(program)) return null
         if (program in BLOCKLIST) return null
@@ -170,6 +243,61 @@ object SafeCommands {
         if (args.any { carriesWriteOrExecFlag(program, it) }) return null
         if (writesToPositionalOutput(program, args)) return null
         return program
+    }
+
+    /**
+     * Split [s] into segments and the operators between them, recognising the shell segment separators
+     * `&&`, `||`, `|`, `;` and `&` only outside quotes, so a separator inside a quoted argument (a commit
+     * message holding `&&`) is not mistaken for a chain. Returns null when the string is malformed for a
+     * family: an unbalanced quote, an empty segment (a leading, trailing or doubled separator), or an
+     * operator run that is not exactly one canonical operator. Operators are kept so the family key
+     * records the chain's shape, and `git diff | tail` never matches a `git diff ; tail`.
+     */
+    private fun splitTopLevel(s: String): Pair<List<String>, List<String>>? {
+        val segments = mutableListOf<String>()
+        val operators = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (quote != null) {
+                current.append(c)
+                if (c == quote) quote = null
+                i++
+                continue
+            }
+            if (c == '\'' || c == '"') {
+                quote = c
+                current.append(c)
+                i++
+                continue
+            }
+            if (c == ';' || c == '|' || c == '&') {
+                val seg = current.toString().trim()
+                if (seg.isEmpty()) return null
+                segments.add(seg)
+                current.setLength(0)
+                var j = i
+                while (j < s.length && s[j] == c) j++
+                val run = j - i
+                val op = when (c) {
+                    ';' -> if (run == 1) ";" else return null
+                    '|' -> when (run) { 1 -> "|"; 2 -> "||"; else -> return null }
+                    else -> when (run) { 1 -> "&"; 2 -> "&&"; else -> return null }
+                }
+                operators.add(op)
+                i = j
+                continue
+            }
+            current.append(c)
+            i++
+        }
+        if (quote != null) return null
+        val last = current.toString().trim()
+        if (last.isEmpty()) return null
+        segments.add(last)
+        return segments to operators
     }
 
     /**

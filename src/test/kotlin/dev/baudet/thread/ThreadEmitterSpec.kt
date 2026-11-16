@@ -223,6 +223,33 @@ class ThreadEmitterSpec : BehaviorSpec({
         }
     }
 
+    given("a tool that returned a picture") {
+        val (emitter, events) = collector()
+        emitter.turnStarted()
+        emitter.toolCallStarted("mcp__qwen__generate", "")
+        emitter.toolCallCompleted(ok = true, output = "1 image(s) returned; shown to the user")
+        emitter.imageCompleted("mcp__qwen__generate", "image/png", "aGVsbG8=")
+
+        `when`("the picture is reported") {
+            then("it is its own row, started and completed in one beat, marked done") {
+                val done = events.filterIsInstance<ItemCompleted>().last().item as ImageItem
+                done.kind shouldBe ItemKind.Image
+                done.status shouldBe ItemStatus.Completed
+                done.tool shouldBe "mcp__qwen__generate"
+                done.mimeType shouldBe "image/png"
+                done.base64 shouldBe "aGVsbG8="
+            }
+            then("the image row opened after the tool row, both reaching the same stream") {
+                methods(events) shouldBe listOf(
+                    "turn/started", "item/started", "item/completed",
+                    "item/started", "item/completed"
+                )
+                events.filterIsInstance<ItemStarted>().map { it.item.kind } shouldBe
+                    listOf(ItemKind.ToolCall, ItemKind.Image)
+            }
+        }
+    }
+
     given("the vocabulary this package publishes") {
         `when`("it is read as wire names") {
             then("the item tags are the app-server's, and only our own extension is marked as ours") {
@@ -231,6 +258,7 @@ class ThreadEmitterSpec : BehaviorSpec({
                 ItemKind.AgentMessage.wireName shouldBe "agentMessage"
                 ItemKind.Reasoning.wireName shouldBe "reasoning"
                 ItemKind.ToolCall.wireName shouldBe "baudet/toolCall"
+                ItemKind.Image.wireName shouldBe "baudet/image"
             }
             then("statuses, decisions and plan lines spell the way the protocol does") {
                 ItemStatus.InProgress.wireName shouldBe "inProgress"

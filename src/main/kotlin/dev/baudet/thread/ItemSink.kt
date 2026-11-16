@@ -68,6 +68,13 @@ interface ItemSink {
     /** ... and ended. */
     fun toolCallCompleted(ok: Boolean, output: String = "") {}
 
+    /**
+     * A tool returned a picture (base64, with its MIME type), shown as its own row. The bytes are
+     * reported here, never through a text delta, so they reach the transcript without ever being
+     * folded into what the model reads.
+     */
+    fun imageCompleted(tool: String, mimeType: String, base64: String) {}
+
     /** Close every open row as interrupted: what a deliberate Stop must leave behind. */
     fun interrupted() {}
 

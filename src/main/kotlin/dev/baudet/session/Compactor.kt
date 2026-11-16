@@ -35,12 +35,13 @@ class Compactor(
      * how a session gets stranded. Only turns whose summary the backend proved complete are
      * cleared, so a refused batch leaves those turns verbatim and the fold stops there.
      *
-     * The fold never cuts a message to make it fit. A turn larger than one summarization call
-     * can carry would have to be cut in half, and the cut tail would never reach the model yet
-     * the whole turn would be cleared once its summary was accepted -- losing text it never read.
-     * The fold therefore stops at such a turn and keeps it, and everything after it, verbatim;
-     * the batches already proved complete still fold. Clearing a turn the model only half read
-     * is a silent loss, and losing the user's words is the one thing compacting must never do.
+     * The fold never clears text the model did not read. A turn larger than one summarization
+     * call is not cut and cleared behind a summary of only its head -- that would lose the tail
+     * silently. It is instead read end to end across consecutive calls, each slice summarized on
+     * top of the running summary, and only once every slice the model actually saw came back
+     * accepted is the whole turn cleared. So a turn that overflows one call folds instead of
+     * stranding the fold, while a slice that comes back refused or fails leaves that turn, and
+     * everything after it, verbatim -- and the batches already proved complete still fold.
      *
      * @return what the fold did, so the caller can report the truth rather than guess at it
      */
@@ -62,31 +63,71 @@ class Compactor(
         while (!stop && remaining.isNotEmpty()) {
             val (batch, rest) = CompactionPlan.foldBatch(remaining, summary?.length ?: 0, maxChars)
             val source = CompactionPlan.source(summary, batch)
-            // [foldBatch] keeps a fitting batch's complete text inside maxChars, so a source longer
-            // than the ceiling means this batch is a single turn too big for one call. The only way
-            // to send it would be to cut its tail, which loses text the model would never read once
-            // the whole turn were cleared. End the fold here and keep that turn verbatim instead.
-            if (source.length > maxChars) {
-                stop = true
-                break
+            if (source.length <= maxChars) {
+                // A batch that fits one call: summarize it whole, exactly as before. A batch that
+                // cannot be summarized at all (backend down, stream lost) must not undo the batches
+                // already folded, so a failure stops here and keeps what was proved -- while the
+                // very first failure still surfaces as an exception, so a backend that is down reads
+                // as an outage and never as a summary that was merely refused.
+                val turn = try {
+                    summarize(source, onDelta)
+                } catch (e: Exception) {
+                    if (folded == 0) throw e
+                    stop = true
+                    null
+                }
+                if (turn != null && acceptsSummary(turn)) {
+                    summary = turn.text.trim()
+                    folded += batch.size
+                    remaining = rest
+                } else {
+                    if (turn != null) refused = turn
+                    stop = true
+                }
+                continue
             }
-            // A batch that cannot be summarized at all (backend down, stream lost) must not undo
-            // the batches already folded: stop here and keep what was proved. The very first
-            // failure still goes out as an exception, so a backend that is down is reported as an
-            // outage and never as a summary that was refused.
-            val turn = try {
-                summarize(source, onDelta)
-            } catch (e: Exception) {
-                if (folded == 0) throw e
-                stop = true
-                null
+            // The source overflows the ceiling, which -- because [foldBatch] carries only one turn
+            // past it -- means this batch is a single turn larger than one call can hold. The old
+            // fold stranded here and kept that turn verbatim, leaving the Compact button folding
+            // nothing on exactly the session that needed it. Instead, fold THIS turn across
+            // consecutive calls: read it in consecutive slices, summarizing each on top of the
+            // running summary, and clear the turn only once EVERY slice the model actually read came
+            // back accepted. No text is ever cleared that the model did not read -- the slices tile
+            // the turn end to end, so their summaries together account for the whole of it.
+            val oversized = batch.singleOrNull()
+                ?: run { stop = true; break } // [foldBatch] overflows only on one turn; defensive
+            var read = 0
+            var whole = true
+            while (read < oversized.content.length) {
+                val room = CompactionPlan.contentRoom(summary?.length ?: 0, oversized.role.length, maxChars)
+                if (room <= 0) {
+                    whole = false // even a slice cannot fit beside the running summary: stop, keep it
+                    break
+                }
+                val upto = (read + room).coerceAtMost(oversized.content.length)
+                val piece = Msg(oversized.role, oversized.content.substring(read, upto))
+                val pieceSource = CompactionPlan.source(summary, listOf(piece))
+                val turn = try {
+                    summarize(pieceSource, onDelta)
+                } catch (e: Exception) {
+                    if (folded == 0) throw e
+                    stop = true
+                    whole = false
+                    break
+                }
+                if (turn != null && acceptsSummary(turn)) {
+                    summary = turn.text.trim()
+                    read = upto
+                } else {
+                    if (turn != null) refused = turn
+                    whole = false
+                    break
+                }
             }
-            if (turn != null && acceptsSummary(turn)) {
-                summary = turn.text.trim()
+            if (whole) {
                 folded += batch.size
                 remaining = rest
             } else {
-                if (turn != null) refused = turn
                 stop = true
             }
         }
@@ -154,9 +195,13 @@ class Compactor(
          *
          * Measured on the local backend against a batch at the [maxSourceChars] ceiling: Qwen3.8
          * finished the summary in 238 output tokens, DeepSeek-V4-Flash in 317 of which 207 was
-         * thinking. Both fit inside 512, which is why 512 stays as the floor, and both left less
-         * than a screenful of headroom -- headroom is precisely what a model that thinks longer
-         * spends. A longer summary costs nothing here: it replaces the text it summarizes.
+         * thinking. Both fit inside 512, but left less than a screenful of headroom -- headroom is
+         * precisely what a model that thinks longer spends, and on a longer or denser transcript
+         * that thinking grows until it eats the whole bound and the content channel comes back
+         * empty, which [acceptsSummary] refuses as "empty" and the fold then does nothing. The
+         * floor is therefore raised well past the measured figures so thinking and summary share
+         * the bound with room left; a longer cap costs nothing here, since it is a ceiling not an
+         * ask, and the summary replaces the text it summarizes.
          *
          * The window bounds the ask, and that bound is the arithmetic already in [maxSourceChars]:
          * a batch may take half the window, so a summary taking a quarter leaves a quarter for the
@@ -186,8 +231,14 @@ class Compactor(
         /** A summary summarizes: a long answer is a model going wrong, so the ask is capped. */
         private const val MAX_SUMMARY_TOKENS = 2_048
 
-        /** The bound this fold used to hardcode, kept as a floor so a tiny window cannot starve it. */
-        private const val MIN_SUMMARY_TOKENS = 512
+        /**
+         * The floor under the fold's output bound, sized so a reasoning model's thinking and its
+         * summary share the bound with room left. It used to be 512, which the measured thinking
+         * (207 tokens) fit inside only because that batch was small; on a denser transcript the
+         * thinking alone can pass 512 and the summary never starts, the exact empty-refusal this
+         * floor exists to prevent. It stays a floor so a tiny window cannot starve the fold.
+         */
+        private const val MIN_SUMMARY_TOKENS = 1_536
 
         /** A summary may ask a quarter of the window; see [summaryTokens] for the arithmetic. */
         private const val SUMMARY_WINDOW_DIVISOR = 4

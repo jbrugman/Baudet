@@ -39,6 +39,9 @@ class ReadFileTool : Tool {
         put("required", buildJsonArray { add("file") })
     }
 
+    /** Reading writes nothing and asks nothing, so two reads can run at once. */
+    override fun canRunParallel(args: JsonObject, ctx: ToolContext): Boolean = true
+
     override fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
         val rel = args.str("file") ?: return fail("needs a file argument")
         val root = ctx.root ?: return fail("no project folder is linked to read from")
