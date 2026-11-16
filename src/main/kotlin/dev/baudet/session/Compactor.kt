@@ -154,9 +154,13 @@ class Compactor(
          *
          * Measured on the local backend against a batch at the [maxSourceChars] ceiling: Qwen3.8
          * finished the summary in 238 output tokens, DeepSeek-V4-Flash in 317 of which 207 was
-         * thinking. Both fit inside 512, which is why 512 stays as the floor, and both left less
-         * than a screenful of headroom -- headroom is precisely what a model that thinks longer
-         * spends. A longer summary costs nothing here: it replaces the text it summarizes.
+         * thinking. Both fit inside 512, but left less than a screenful of headroom -- headroom is
+         * precisely what a model that thinks longer spends, and on a longer or denser transcript
+         * that thinking grows until it eats the whole bound and the content channel comes back
+         * empty, which [acceptsSummary] refuses as "empty" and the fold then does nothing. The
+         * floor is therefore raised well past the measured figures so thinking and summary share
+         * the bound with room left; a longer cap costs nothing here, since it is a ceiling not an
+         * ask, and the summary replaces the text it summarizes.
          *
          * The window bounds the ask, and that bound is the arithmetic already in [maxSourceChars]:
          * a batch may take half the window, so a summary taking a quarter leaves a quarter for the
@@ -186,8 +190,14 @@ class Compactor(
         /** A summary summarizes: a long answer is a model going wrong, so the ask is capped. */
         private const val MAX_SUMMARY_TOKENS = 2_048
 
-        /** The bound this fold used to hardcode, kept as a floor so a tiny window cannot starve it. */
-        private const val MIN_SUMMARY_TOKENS = 512
+        /**
+         * The floor under the fold's output bound, sized so a reasoning model's thinking and its
+         * summary share the bound with room left. It used to be 512, which the measured thinking
+         * (207 tokens) fit inside only because that batch was small; on a denser transcript the
+         * thinking alone can pass 512 and the summary never starts, the exact empty-refusal this
+         * floor exists to prevent. It stays a floor so a tiny window cannot starve the fold.
+         */
+        private const val MIN_SUMMARY_TOKENS = 1_536
 
         /** A summary may ask a quarter of the window; see [summaryTokens] for the arithmetic. */
         private const val SUMMARY_WINDOW_DIVISOR = 4

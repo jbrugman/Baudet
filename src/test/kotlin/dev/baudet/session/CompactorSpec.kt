@@ -147,11 +147,15 @@ class CompactorSpec : BehaviorSpec({
             then("the ceiling is exactly a quarter of the window it was written for") {
                 Compactor.summaryTokens(8_192) shouldBe 2_048
             }
-            then("a small model bounds it, so the fold cannot ask for output it has no room for") {
-                Compactor.summaryTokens(4_096) shouldBe 1_024
+            then("a window between floor and ceiling bounds it, so the fold cannot ask for output it has no room for") {
+                // 7168/4 = 1792 sits between the floor and the ceiling, so this is the one range
+                // where the window still wins over both and the bound is genuinely window-derived.
+                Compactor.summaryTokens(7_168) shouldBe 1_792
             }
-            then("a window too small to hold either half keeps the floor, or a model never answers") {
-                Compactor.summaryTokens(1_024) shouldBe 512
+            then("a window too small to hold either half keeps the floor, or a reasoning model's thinking starves the summary") {
+                // 1024/4 = 256 is below the floor, which exists so thinking and summary share the
+                // bound with room left; the floor wins rather than starving the fold.
+                Compactor.summaryTokens(1_024) shouldBe 1_536
             }
             then("an unknown window of 0 means unknown, not no room") {
                 Compactor.summaryTokens(0) shouldBe 2_048
