@@ -292,21 +292,37 @@ class AppState(val store: H2Store) {
     }
 
     /**
-     * Load an existing conversation by id and adopt its project, so a later
-     * New session continues in the same place as the one just opened.
+     * Read one conversation out of the store into a fresh state without touching any shared
+     * field. Safe to call off the UI thread: only the store read and the immutable read of
+     * [config.model] happen here; [adoptSession] is what makes the result the current one.
+     * Its project is adopted too, so a later New session continues in the same place.
      */
-    fun loadSession(id: String) {
-        if (turning) return
-        session = SessionState(
+    fun buildSession(id: String): SessionState {
+        val s = SessionState(
             sessionId = id,
             model = store.model(id) ?: config.model,
             previousResponseId = store.previousResponseId(id),
             messages = store.messages(id).toMutableList()
         )
-        session.items += store.items(id)
-        session.summary = store.summaryOf(id)
-        session.projectId = store.projectOfSession(id)
-        currentProjectId = session.projectId
+        s.items += store.items(id)
+        s.summary = store.summaryOf(id)
+        s.projectId = store.projectOfSession(id)
+        return s
+    }
+
+    /**
+     * Make a session built by [buildSession] the current one. Mutates shared fields, so it must
+     * run on the UI thread. The split between read and adopt is what lets the read happen on a
+     * worker while the swap stays single-threaded and never interleaves with a turn's writes.
+     */
+    fun adoptSession(s: SessionState) {
+        session = s
+        currentProjectId = s.projectId
+    }
+
+    fun loadSession(id: String) {
+        if (turning) return
+        adoptSession(buildSession(id))
     }
 
     // ---- projects --------------------------------------------------------
