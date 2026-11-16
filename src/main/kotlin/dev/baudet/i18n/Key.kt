@@ -238,6 +238,19 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Wie viele Runden gleichzeitig laufen. Auf einem großen lokalen Rechner erhöhen; auf einem kleinen Laptop bei 1 bleiben. Die App beachtet den Wert, soweit ihr Gesprächsmodell es heute zulässt."
     ),
     ErrMaxParallelTurns("max parallel turns must be 1 or more", "max parallelle beurten moet 1 of meer zijn", "le nombre de tours parallèles max doit être au moins 1", "max. parallele Runden müssen mindestens 1 sein"),
+    HonestyFooter("show the local-model note", "notitie over lokaal model tonen", "afficher la note du modèle local", "Hinweis zum lokalen Modell anzeigen"),
+    TipHonestyFooter(
+        "A quiet line at the bottom reminding that a local model can be wrong. On by default.",
+        "Een subtiele regel onderaan eraan herinnerend dat een lokaal model fout kan zijn. Standaard aan.",
+        "Une ligne discrète en bas rappelant qu'un modèle local peut se tromper. Activée par défaut.",
+        "Eine dezente Zeile unten, die daran erinnert, dass ein lokales Modell falsch liegen kann. Standardmäßig an."
+    ),
+    LocalHonestyNote(
+        "Local model — it can be wrong or invent things. Verify anything that matters.",
+        "Lokaal model — het kan fout zijn of dingen verzinnen. Controleer wat er echt toe doet.",
+        "Modèle local — il peut se tromper ou inventer. Vérifiez ce qui compte vraiment.",
+        "Lokales Modell — es kann falsch liegen oder erfinden. Prüfen Sie, worauf es ankommt."
+    ),
     Diagnostics("diagnostics", "diagnostiek", "diagnostic", "Diagnose"),
     LoadedFromDisk("loaded from {0}", "laden vanaf {0}", "chargé depuis {0}", "geladen von {0}"),
     ErrMaxTokens("max output tokens must be 0 or a positive number", "max output tokens moet 0 of een positief getal zijn", "les jetons de sortie max doivent être 0 ou un nombre positif", "max. Ausgabetoken muss 0 oder eine positive Zahl sein"),

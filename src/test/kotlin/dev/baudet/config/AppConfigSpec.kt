@@ -185,22 +185,27 @@ class AppConfigSpec : BehaviorSpec({
             then("a single turn runs at a time by default") {
                 cfg.maxParallelTurns shouldBe 1
             }
+            then("the local-model honesty note is on by default") {
+                cfg.honestyFooter shouldBe true
+            }
         }
         `when`("an old blob that predates them is read back") {
             val cfg = json.decodeFromString(AppConfig.serializer(), """{"model":"m1"}""")
             then("they fall back to their defaults rather than failing the load") {
                 cfg.transcriptWrap shouldBe true
                 cfg.maxParallelTurns shouldBe 1
+                cfg.honestyFooter shouldBe true
             }
         }
         `when`("they round-trip through the stored form") {
-            val cfg = AppConfig(transcriptWrap = false, maxParallelTurns = 4)
+            val cfg = AppConfig(transcriptWrap = false, maxParallelTurns = 4, honestyFooter = false)
             val back = json.decodeFromString(
                 AppConfig.serializer(), json.encodeToString(AppConfig.serializer(), cfg)
             )
-            then("both survive verbatim") {
+            then("all three survive verbatim") {
                 back.transcriptWrap shouldBe false
                 back.maxParallelTurns shouldBe 4
+                back.honestyFooter shouldBe false
             }
         }
     }

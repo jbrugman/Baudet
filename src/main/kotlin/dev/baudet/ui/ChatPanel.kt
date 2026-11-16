@@ -89,6 +89,13 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         add(JButton(Texts[Key.ImageRemoveButton]).apply { addActionListener { clearPendingImage() } })
     }
     private val status = JTextField(" ").apply { isEditable = false; minimumSize = Dimension(0, 0) }
+
+    /** The quiet honesty line docked at the bottom: a local model can be wrong, with no service behind it. */
+    private val honestyFooter = JLabel(Texts[Key.LocalHonestyNote]).apply {
+        foreground = BaudetPalette.dim
+        font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+        border = EmptyBorder(2, 10, 4, 10)
+    }
     /** An amber note shown only when this conversation cannot change files: see [updateToolWarning]. */
     private val toolWarning = JLabel().apply {
         foreground = BaudetPalette.warn
@@ -227,6 +234,8 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         applyWrap()
         centerSplit.bottomComponent = south
         add(centerSplit, BorderLayout.CENTER)
+        add(honestyFooter, BorderLayout.SOUTH)
+        applyHonesty()
 
         // A released divider is the moment worth saving: the split is not continuous, so this
         // fires on mouse-up rather than per pixel, and only while the dock is actually shown.
@@ -376,6 +385,9 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         transcript.applyWrap()
     }
 
+    /** Show or hide the honesty line from saved config, so a Settings flip lands without a rebuild. */
+    fun applyHonesty() { honestyFooter.isVisible = state.config.honestyFooter }
+
     fun refresh() {
         resetThinking()
         val s = state.session
@@ -387,6 +399,7 @@ class ChatPanel(private val state: AppState) : JPanel(BorderLayout()) {
         updateToolWarning()
         clearPendingImage()
         applyWrap()
+        applyHonesty()
     }
 
     /**

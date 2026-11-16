@@ -84,6 +84,7 @@ fun main(args: Array<String>) {
                 // A non-language change still reaches the open chat without a rebuild; the
                 // transcript wrap mode is the setting that shows up on the live conversation.
                 layout.chat.applyWrap()
+                layout.chat.applyHonesty()
             }
         }
 
