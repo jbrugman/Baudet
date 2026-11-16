@@ -41,5 +41,18 @@ class ToolContext(
      * interpreter or a write flag -- so a trusted family cannot reach further than the program the user
      * named. Handed over as a provider like [autoAllow], so a family pinned mid-turn counts in that turn.
      */
-    val trustedCommands: () -> Set<String> = { emptySet() }
+    val trustedCommands: () -> Set<String> = { emptySet() },
+    /**
+     * Standing grants for external MCP servers: a server whose id is one of these runs its tools without
+     * a per-call prompt. A provider like [autoAllow], so an "always" taken mid-turn counts in that turn.
+     * Empty by default, so nothing external runs until the human grants it.
+     */
+    val mcpAllowServers: () -> Set<String> = { emptySet() },
+    /**
+     * Ask the human before an MCP tool runs. The callback runs the approval card itself and returns the
+     * answer; it is the tool's responsibility to honour an "always" choice by adding the server to
+     * [mcpAllowServers], exactly as [approveCommand] pins a command on AcceptForSession. It denies by
+     * default, so a context that never wires MCP can never run an external tool.
+     */
+    val approveMcp: (serverId: String, tool: String, arguments: String) -> Boolean = { _, _, _ -> false }
 )

@@ -6,11 +6,14 @@ import dev.baudet.api.ModelWindows
 import dev.baudet.api.ModelGateway
 import dev.baudet.api.ResponsesGateway
 import dev.baudet.api.Turn
+import dev.baudet.api.json
 import dev.baudet.config.AppConfig
 import dev.baudet.config.ContextStrategy
 import dev.baudet.config.ToolMode
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
+import dev.baudet.mcp.McpServerConfig
+import dev.baudet.mcp.McpServers
 import dev.baudet.project.FolderPermission
 import dev.baudet.project.Project
 import dev.baudet.session.CompactionOutcome
@@ -53,6 +56,13 @@ import java.nio.file.Paths
 class AppState(val store: H2Store) {
 
     var config: AppConfig = store.load() ?: AppConfig()
+
+    /**
+     * The live MCP clients, owned here so their lifecycle (connect lazily, reconcile against config,
+     * tear down at close) sits with the turn that uses them rather than in the UI. A fresh manager has
+     * no clients: nothing launches until a turn builds its tools against a non-empty [AppConfig.mcpServers].
+     */
+    val mcpServers = McpServers()
 
     /**
      * Builds the transport for one turn. It is a factory rather than a single instance so
@@ -441,6 +451,68 @@ class AppState(val store: H2Store) {
         }
         if (cleared) store.save(config)
     }
+
+    /**
+     * The MCP servers allowed to run without a prompt, copied under the same lock
+     * [allowMcpServerAlways] writes under: an "always" taken on a card during a live turn must count on
+     * that turn's next call, read afresh through [ToolContext.mcpAllowServers], and copying the list
+     * mid-add is what turns a permission into a crash.
+     */
+    fun allowedMcpServers(): Set<String> =
+        synchronized(config.mcpAllowServers) { config.mcpAllowServers.toSet() }
+
+    /**
+     * Pin a whole MCP server to the always-allow list and persist it, so its tools run without a prompt
+     * from now on -- including the turn now running, since [allowedMcpServers] is read on every call.
+     * Stored by server id, the same key a grant is read under, so it holds as long as the user keeps that
+     * id stable. Persists with [H2Store.save] alone rather than [saveConfig], mirroring [allowCommandAlways]:
+     * an allow-list change must not rebuild the panels for something a running turn reads on its next call.
+     */
+    fun allowMcpServerAlways(id: String) {
+        var changed = false
+        synchronized(config.mcpAllowServers) {
+            if (id !in config.mcpAllowServers) { config.mcpAllowServers.add(id); changed = true }
+        }
+        if (changed) store.save(config)
+    }
+
+    /** Drop every always-allowed MCP server; persists without firing [onConfigSaved]. */
+    fun clearMcpAllowServers() {
+        var cleared = false
+        synchronized(config.mcpAllowServers) {
+            if (config.mcpAllowServers.isNotEmpty()) { config.mcpAllowServers.clear(); cleared = true }
+        }
+        if (cleared) store.save(config)
+    }
+
+    /**
+     * Replace the MCP servers with the configs parsed from the given lines, each a single JSON object. A
+     * line that will not parse, names no id or command, or repeats an id already taken is dropped rather
+     * than trusted; order is kept. Nothing launches or stops here -- [McpServers] reconciles the live set
+     * on the next turn -- so editing a server is safe while a turn runs. Returns how many lines were
+     * dropped, so the UI can report them. Persists like [allowMcpServerAlways], without firing [onConfigSaved].
+     */
+    fun replaceMcpServers(lines: List<String>): Int {
+        val kept = ArrayList<McpServerConfig>()
+        val seen = HashSet<String>()
+        var dropped = 0
+        for (raw in lines) {
+            val cfg = runCatching { json.decodeFromString(McpServerConfig.serializer(), raw) }.getOrNull()
+            if (cfg == null || cfg.id.isBlank() || cfg.command.isBlank() || cfg.id in seen) { dropped++; continue }
+            seen.add(cfg.id); kept.add(cfg)
+        }
+        synchronized(config.mcpServers) {
+            config.mcpServers.clear(); config.mcpServers.addAll(kept)
+        }
+        store.save(config)
+        return dropped
+    }
+
+    /** The ids of MCP servers connected right now, for the Settings panel to report. */
+    fun connectedMcp(): Set<String> = mcpServers.connected()
+
+    /** Tear down every live MCP server. Called once as the app closes, so a child process never outlives it. */
+    fun closeMcp() = mcpServers.closeAll()
 
     /** Delete a project and every conversation inside it; files on disk are never touched. */
     fun deleteProject(id: String) {
@@ -853,7 +925,18 @@ class AppState(val store: H2Store) {
             readGranted = readGranted,
             autoAllow = { allowedCommands() },
             autoApproveSafe = config.autoApproveSafeCommands,
-            trustedCommands = { trustedCommands() }
+            trustedCommands = { trustedCommands() },
+            // An external MCP server runs only what the human lets it: a standing grant skips the
+            // prompt, otherwise the tool's own card asks once, and "always" pins the whole server for
+            // the rest of the app -- the same three answers a command offers, read afresh each call.
+            mcpAllowServers = { allowedMcpServers() },
+            approveMcp = { sid, tool, args ->
+                when (requestApproval(emitter, token, ApprovalRequest.McpTool(sid, tool, args))) {
+                    ApprovalDecision.Accept -> true
+                    ApprovalDecision.AcceptForSession -> { allowMcpServerAlways(sid); true }
+                    else -> false
+                }
+            }
         )
         // Build the enabled tools once, then advertise exactly those in the prompt: the registry
         // and the system prompt must name the same set, or the model is taught to call a tool it
@@ -866,8 +949,17 @@ class AppState(val store: H2Store) {
             // git is offered whenever Read is granted; its write verbs appear only when the user switched
             // git writes on AND this folder grants Write, so a switch never reaches past the folder's rights.
             if (readGranted) add(GitTool(writesAllowed = config.gitAllowWrites && writable))
+            // External MCP tools join the registry only when the user opted a server in and it came up;
+            // a server that will not start contributes nothing here, so the model never sees a tool it
+            // cannot call. The config is snapshotted under its lock so an edit mid-call cannot corrupt
+            // this iteration while the Settings panel applies a new line.
+            addAll(mcpServers.tools(synchronized(config.mcpServers) { config.mcpServers.toList() }))
         }
-        val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet())
+        // A prompted backend reads an external tool's shape from the prompt, not the request body -- the
+        // built-ins do not need this, being fixed -- so each MCP tool's schema is advertised alongside it.
+        val extras = tools.filter { it.name.startsWith("mcp__") }
+            .map { CallExtractor.ExtraTool(it.name, it.description, it.parameters.toString()) }
+        val system = instructionsFor(s) + "\n\n" + CallExtractor.protocolFor(tools.map { it.name }.toSet(), extras)
         val loop = ToolLoop(
             // The source is given the same strategy and budget this turn opened with, so every
             // request the loop fires -- not only the first -- is capped to the configured budget

@@ -491,6 +491,63 @@ enum class Key(val en: String, val nl: String, val fr: String, val de: String) {
         "Liste fiable appliquée ; {0} ligne(s) écartée(s) car elles ne nomment aucune famille sûre",
         "Vertrauensliste angewendet; {0} Zeile(n) verworfen, weil sie keine sichere Familie nennen"
     ),
+    // ---- external MCP servers ---------------------------------------------
+    // An MCP server is arbitrary local code Baudet launches, so there is no default and an
+    // always-allow grant is recorded under a server id the user typed: that id must stay stable,
+    // which is what the hint warns about. The dropped-line string stays honest about *why* a line
+    // went -- it was not valid server JSON -- rather than blaming the user's intent.
+    McpManagerTitle(
+        "MCP servers (stdio)", "MCP-servers (stdio)", "Serveurs MCP (stdio)", "MCP-Server (stdio)"
+    ),
+    McpServersLabel(
+        "servers (one JSON object per line)", "servers (één JSON-object per regel)", "serveurs (un objet JSON par ligne)", "Server (ein JSON-Objekt pro Zeile)"
+    ),
+    McpServersHint(
+        "One MCP server per line, each a JSON object with an id, a command and optional args, env and enabled. Nothing runs until you add a line here, because an MCP server is arbitrary local code. Keep each id stable: an always-allow grant is recorded under it.",
+        "Eén MCP-server per regel, elk een JSON-object met een id, een commando en optioneel args, env en enabled. Er draait niets totdat je hier een regel toevoegt, want een MCP-server is willekeurige lokale code. Houd elke id stabiel: een altijd-toestaan-vergunning wordt eraan vastgelegd.",
+        "Un serveur MCP par ligne, chacun un objet JSON avec un id, une commande et, en option, args, env et enabled. Rien ne s'exécute tant que vous n'avez pas ajouté une ligne ici, car un serveur MCP est du code local quelconque. Gardez chaque id stable : une autorisation permanente y est rattachée.",
+        "Ein MCP-Server pro Zeile, jeweils ein JSON-Objekt mit einer id, einem Befehl und optional args, env und enabled. Nichts läuft, bis du hier eine Zeile hinzufügst, denn ein MCP-Server ist beliebiger lokaler Code. Halte jede id stabil: eine Immer-Erlaubnis wird daran festgemacht."
+    ),
+    McpAllowLabel(
+        "always-allowed servers", "altijd-toegestane servers", "serveurs toujours autorisés", "Immer erlaubte Server"
+    ),
+    McpAllowHint(
+        "Server ids whose tools run without a prompt. A server not listed here still asks on every call.",
+        "Server-ids waarvan de tools zonder prompt draaien. Een server die hier niet staat, vraagt nog bij elke aanroep.",
+        "Les id de serveurs dont les outils s'exécutent sans invite. Un serveur absent d'ici demande encore à chaque appel.",
+        "Server-ids, deren Tools ohne Nachfrage laufen. Ein Server, der hier nicht steht, fragt bei jedem Aufruf erneut."
+    ),
+    ApplyMcpButton(
+        "Apply MCP servers", "MCP-servers toepassen", "Appliquer les serveurs MCP", "MCP-Server anwenden"
+    ),
+    ClearMcpAllowButton(
+        "Clear allowed servers", "Toegestane servers wissen", "Effacer serveurs autorisés", "Erlaubte Server löschen"
+    ),
+    TipApplyMcp(
+        "Parse each line as a JSON MCP server config; invalid lines are dropped.",
+        "Parse elke regel als een JSON MCP-serverconfig; ongeldige regels worden verwijderd.",
+        "Analyser chaque ligne comme une configuration de serveur MCP JSON ; les lignes invalides sont écartées.",
+        "Jede Zeile als eine JSON-MCP-Serverkonfiguration parsen; ungültige Zeilen werden verworfen."
+    ),
+    TipClearMcpAllow(
+        "Remove every always-allowed server, so every MCP tool asks again.",
+        "Verwijder elke altijd-toegestane server, zodat elke MCP-tool opnieuw vraagt.",
+        "Supprimer tous les serveurs toujours autorisés, pour que chaque outil MCP redemande.",
+        "Alle immer erlaubten Server entfernen, damit jedes MCP-Tool erneut fragt."
+    ),
+    McpDropped(
+        "MCP servers applied; {0} line(s) dropped as not valid server JSON",
+        "MCP-servers toegepast; {0} regel(s) verwijderd omdat het geen geldige server-JSON is",
+        "Serveurs MCP appliqués ; {0} ligne(s) écartée(s) car ce n'est pas un JSON de serveur valide",
+        "MCP-Server angewendet; {0} Zeile(n) verworfen, weil sie kein gültiges Server-JSON sind"
+    ),
+    ApprovalMcpHeading(
+        "Run external MCP tool {1} from `{0}`?",
+        "Externe MCP-tool {1} van `{0}` uitvoeren?",
+        "Exécuter l'outil MCP externe {1} de `{0}` ?",
+        "Externes MCP-Tool {1} von `{0}` ausführen?"
+    ),
+
     ImageRemoveButton(
         "Remove",
         "Verwijderen",

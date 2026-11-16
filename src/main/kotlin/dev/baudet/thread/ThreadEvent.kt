@@ -139,6 +139,20 @@ sealed class ApprovalRequest {
     ) : ApprovalRequest() {
         override val wireMethod: String get() = "item/fileChange/requestApproval"
     }
+
+    /**
+     * An external MCP tool waiting for a decision: [serverId] names the server, [tool] the tool on it,
+     * [arguments] the raw JSON it would run with. The human grants one call or the whole server; the
+     * method is Baudet's own, not an app-server one, because no wire item the backend defined covers an
+     * out-of-band third-party tool.
+     */
+    data class McpTool(
+        val serverId: String,
+        val tool: String,
+        val arguments: String
+    ) : ApprovalRequest() {
+        override val wireMethod: String get() = "item/mcpTool/requestApproval"
+    }
 }
 
 /** The turn is blocked on [request]; the answer arrives as an [ApprovalResolved]. */

@@ -1,5 +1,6 @@
 package dev.baudet.config
 
+import dev.baudet.mcp.McpServerConfig
 import kotlinx.serialization.Serializable
 
 /**
@@ -174,7 +175,21 @@ data class AppConfig(
      * reject it. Zero means never learned.
      */
     var learnedContextWindow: Int = 0,
-    var learnedContextKey: String = ""
+    var learnedContextKey: String = "",
+
+    /**
+     * The MCP servers the user opted into, each a local command Baudet launches as a tool source. There
+     * is no default: a fresh install runs zero servers, because an MCP server is arbitrary local code.
+     * This rides in the single-row JSON blob like every other setting, so adding or editing one touches
+     * no schema. [dev.baudet.mcp.McpServers] connects them lazily on the first tool turn.
+     */
+    var mcpServers: MutableList<McpServerConfig> = mutableListOf(),
+    /**
+     * Server ids the user chose to always allow, so that server's tools run without a per-call prompt.
+     * Off by empty; a server never listed here still asks on every call, mirroring how a command only
+     * skips its prompt once pinned in [autoAllowCommands].
+     */
+    var mcpAllowServers: MutableList<String> = mutableListOf()
 ) {
     /** Key resolution: UI input wins, then the environment. Never hardcoded. */
     fun resolvedApiKey(): String =

@@ -1,12 +1,14 @@
 package dev.baudet.ui
 
 import dev.baudet.api.CapabilityProbe
+import dev.baudet.api.json
 import dev.baudet.app.AppState
 import dev.baudet.config.AppConfig
 import dev.baudet.config.ContextStrategy
 import dev.baudet.config.ToolMode
 import dev.baudet.i18n.Key
 import dev.baudet.i18n.Texts
+import dev.baudet.mcp.McpServerConfig
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Font
@@ -57,6 +59,14 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
     }
     private val autoAllowArea = JTextArea(6, 34).apply {
+        isEditable = false
+        font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+    }
+
+    private val mcpArea = JTextArea(6, 34).apply {
+        font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+    }
+    private val mcpAllowArea = JTextArea(3, 34).apply {
         isEditable = false
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
     }
@@ -149,6 +159,27 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         commandButtons.add(JButton(Texts[Key.ClearAlwaysButton]).apply { toolTipText = Texts[Key.TipClearAlways]; addActionListener { clearAlways() } })
         commandPanel.add(commandButtons, BorderLayout.SOUTH)
 
+        // The MCP opt-in: an editable box of one server-per-line JSON above, and the read-only list of
+        // servers whose tools run without a prompt below. Nothing connects until Apply -- and nothing at
+        // all until the user types a server, because an MCP server is arbitrary local code the user trusts.
+        val mcpPanel = JPanel(BorderLayout())
+        mcpPanel.border = BorderFactory.createTitledBorder(Texts[Key.McpManagerTitle])
+        mcpArea.toolTipText = Texts[Key.McpServersHint]
+        mcpAllowArea.toolTipText = Texts[Key.McpAllowHint]
+        mcpPanel.add(
+            formPanel(
+                listOf(
+                    Texts[Key.McpServersLabel] to scrollingField(mcpArea),
+                    Texts[Key.McpAllowLabel] to scrollingField(mcpAllowArea)
+                )
+            ),
+            BorderLayout.NORTH
+        )
+        val mcpButtons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
+        mcpButtons.add(JButton(Texts[Key.ApplyMcpButton]).apply { toolTipText = Texts[Key.TipApplyMcp]; addActionListener { applyMcp() } })
+        mcpButtons.add(JButton(Texts[Key.ClearMcpAllowButton]).apply { toolTipText = Texts[Key.TipClearMcpAllow]; addActionListener { clearMcpAllow() } })
+        mcpPanel.add(mcpButtons, BorderLayout.SOUTH)
+
         // Everything the user edits lives in one scrollable body, so a short window never pushes the Save
         // button or the trust manager off screen: form, command manager and diagnostics stack and scroll
         // together, while the action buttons and the status line stay pinned along the bottom.
@@ -166,6 +197,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         }
         addBodyRow(form)
         addBodyRow(commandPanel)
+        addBodyRow(mcpPanel)
         addBodyRow(
             javax.swing.JScrollPane(probeOut).apply {
                 border = BorderFactory.createTitledBorder(Texts[Key.Diagnostics])
@@ -237,6 +269,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
         reloadCommandLists()
+        reloadMcp()
         updateEnabled()
     }
 
@@ -267,6 +300,31 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private fun clearAlways() {
         state.clearAllowedCommands()
         reloadCommandLists()
+    }
+
+    /** Refill the MCP panels: the editable server JSON from the stored configs, and the always-allowed ids. */
+    private fun reloadMcp() {
+        mcpArea.text = state.config.mcpServers
+            .joinToString("\n") { json.encodeToString(McpServerConfig.serializer(), it) }
+        mcpAllowArea.text = state.allowedMcpServers().sorted().joinToString("\n")
+    }
+
+    /**
+     * Persist the server JSON typed in the box. Each line is parsed as one server config; anything that
+     * is not valid server JSON is dropped rather than trusted, and the count is reported back. Nothing
+     * launches here -- the next turn reconciles the live set -- so editing servers is safe while a turn runs.
+     */
+    private fun applyMcp() {
+        val lines = mcpArea.text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        val dropped = state.replaceMcpServers(lines)
+        reloadMcp()
+        status.foreground = if (dropped == 0) Color(120, 200, 130) else Color(230, 180, 100)
+        status.text = Texts.fmt(Key.McpDropped, dropped)
+    }
+
+    private fun clearMcpAllow() {
+        state.clearMcpAllowServers()
+        reloadMcp()
     }
 
     private fun fail(m: String) {

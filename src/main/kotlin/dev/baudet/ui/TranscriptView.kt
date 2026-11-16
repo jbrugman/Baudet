@@ -648,9 +648,24 @@ class TranscriptView : JPanel(BorderLayout()) {
                 Key.ApplyPatch to ApprovalDecision.Accept,
                 Key.DenyButton to ApprovalDecision.Decline
             )
+            // An external MCP tool can be granted for this call or for its whole server, exactly as a
+            // command can be run once or pinned; there is no middle answer, so the bar mirrors RunCommand.
+            is ApprovalRequest.McpTool -> listOf(
+                Key.AllowOnce to ApprovalDecision.Accept,
+                Key.AlwaysAllow to ApprovalDecision.AcceptForSession,
+                Key.DenyButton to ApprovalDecision.Decline
+            )
         }
         return JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
             isOpaque = false
+            // A command and a patch already name themselves in their row; an MCP tool does not, so its
+            // card says which server and tool it is before the human decides.
+            if (request is ApprovalRequest.McpTool) {
+                add(JLabel(Texts.fmt(Key.ApprovalMcpHeading, request.serverId, request.tool)).apply {
+                    foreground = BaudetPalette.warn
+                    font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                })
+            }
             add(JLabel(Texts[Key.ApprovalWaiting]).apply {
                 foreground = BaudetPalette.warn
                 font = Font(Font.MONOSPACED, Font.PLAIN, 11)
