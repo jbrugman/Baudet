@@ -136,7 +136,21 @@ object SafeCommands {
         "sudo", "su", "doas", "kill", "killall", "pkill", "reboot", "shutdown", "halt", "poweroff",
         "mount", "umount", "launchctl", "systemctl", "service",
         // network: fetch-and-run and remote control
-        "curl", "wget", "nc", "ncat", "socat", "ssh", "scp", "sftp", "rsync"
+        "curl", "wget", "nc", "ncat", "socat", "ssh", "scp", "sftp", "rsync",
+        // writers and exec trampolines: one Always on a benign-looking run must not let a later
+        // rewording write outside the folder or run arbitrary code. tee/install/patch/touch/mkdir/ln
+        // place or rewrite files wherever their argument points (FolderBoundary does not fence an
+        // execute), and xargs/env build a command line from their input, so a family key on the bare
+        // name would vouch for `echo key | tee ~/.ssh/authorized_keys` after one on
+        // `echo ok | tee build.log`. Blocking them keeps the read-only auto-run gate (isSafe) untouched
+        // -- none of these are read-only -- and only strips the family grant, so they fall back to a
+        // verbatim pin that cannot match a reworded run.
+        "tee", "install", "patch", "touch", "mkdir", "ln", "xargs", "env",
+        // archive and compression writers: one Always on an innocuous pack must not let a later
+        // reworded one write wherever its output path points. tar/gzip/bzip2/zip/cpio each place a
+        // file outside the folder straight from their arguments (an execute is not folder-fenced),
+        // so they earn no family key either and fall back to a verbatim pin.
+        "tar", "gzip", "bzip2", "zip", "cpio"
     )
 
     /**

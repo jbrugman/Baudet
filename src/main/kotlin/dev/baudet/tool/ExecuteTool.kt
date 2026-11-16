@@ -95,9 +95,9 @@ class ExecuteTool : Tool {
 
         val script = runCatching { Files.createTempFile(temp, "baudet-run-", ".sh") }
             .getOrElse { return fail("the run script could not be staged in the temp folder") }
-        if (!ExecuteWorkspace.withinAllowed(script, listOf(temp, cwd))) {
+        if (!ExecuteWorkspace.withinAllowed(script, listOf(temp))) {
             runCatching { Files.deleteIfExists(script) }
-            return fail("the run script did not stage inside the allowed folders")
+            return fail("the run script did not stage inside the temp folder")
         }
 
         return try {

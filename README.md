@@ -72,55 +72,84 @@ concrete behavior:
   stays visible so a silently missed delta cannot hide.
 - **Client-side compaction**, because there is no compact endpoint to call.
 
-## Current state: alpha
+## Current state: beta
 
-The wire layer and the project tools work; the editor surface around them is still
-thin. The model can read a project file, apply a patch to one, query git read-only,
-and run a shell command it first has to ask you to approve — which is what tips Baudet
-from a chat client toward a coding assistant.
+The wire layer, the project tools and the surfaces around them are in place: Baudet is
+usable as a day-to-day local coding assistant, with the local-model honesty a cloud client
+leaves out. A local model can read a project file, apply a patch, query and (opt-in) drive
+git, run a shell command it first asks you to approve, and call external tools over MCP -
+which tips it from a chat client into a coding agent. It is labelled beta rather than
+stable: local backends are unpredictable and the behaviour is tuned, not guaranteed.
 
 Working:
 
-- list models, pick one, and save settings
+- list models, pick one, and save settings; an honest capability probe reports what the
+  backend *does*, not what it merely accepts
 - streaming chat over `/v1/responses`, keeping the server-side session through
-  `previous_response_id`
-- **Stop** closes the stream still open on the backend, so a read waiting for the
-  next event releases at once; **Steer** sends your next instruction as soon as
-  the cut lands and keeps the partial answer so that instruction can steer
-- reasoning stays out of the transcript: it fills a closable dock above the input,
-  as tall as the input, and is display-only
-- answers render fenced blocks, headings, bullets, bold, italic and inline code, and
-  identifiers such as `max_output_tokens` survive verbatim
-- an honest capability probe reports what the backend *does*, not what it merely
-  accepts, and the last conversation is restored after a restart
-- context is bounded before it leaves the app: a **context strategy** (Keep last by
-  default, Rolling window, Stop at limit) picks the history, the system prompt always
-  leads, and a turn that cannot fit is folded or refused rather than sent doomed
+  `previous_response_id`, with honest token accounting and reasoning tokens kept apart from
+  the answer
+- **Stop** closes a stream still open on the backend, so a read waiting on the next event
+  releases at once; **Steer** sends your next instruction as soon as the cut lands and keeps
+  the partial answer so that instruction can steer it
+- reasoning stays out of the transcript: it fills a closable dock above the input and is
+  display-only
+- answers render fenced blocks, headings, bullets, bold, italic and inline code, and a
+  **wrap long lines** option keeps a wide line readable - folded to fit, or kept whole with a
+  horizontal scrollbar when a diff or long path should not be broken
+- context is bounded before it leaves the app: a **context strategy** (Keep last by default,
+  Rolling window, Stop at limit) picks the history, the system prompt always leads, and
+  client-side **compaction** folds an over-long turn - across several calls when one turn is
+  too big for a single one - and reports honestly when nothing compacted
+- the transcript is **persisted** and restored after a restart, and an older history loads
+  lazily by pages (infinite scroll) rather than all at once; when context is genuinely lost
+  the app says so instead of quietly acting on a turn from far back
 - a project sidebar groups conversations and gates tools by the linked folder's rights
-  (Read, Write, Execute); the tools are `read_file`, `edit_file`, `run_command` and a
-  read-only `git`, driven through a tool loop
-- `run_command` runs a shell in the project folder with `TMPDIR` set to the temp folder;
-  by default every command asks. Unattended auto-approval stays strictly read-only (a chain,
+  (Read, Write, Execute); the built-in tools are `read_file`, `edit_file`, `run_command` and
+  `git`, driven through a tool loop that **runs independent tool calls in parallel** - one
+  turn fans its side-effect-free reads across a small worker pool (bounded to 2) and joins the
+  results, so it greps a tree and reads a file at once rather than in series; a call that could
+  write, or one you pinned, stays serial, so parallelism never races on a side effect
+- `git` reads by default; an opt-in switch adds the write verbs `add`, `commit`, `checkout`,
+  `stash` and `push`, each still gated by the folder's Write right and your approval on its
+  card, with force-push, history rewrite and destructive stash kept blocked
+- `run_command` runs a shell in the project folder with `TMPDIR` set to the temp folder; by
+  default every command asks. Unattended auto-approval stays strictly read-only (a chain,
   redirect, substitution or a payload tool such as `sed` is never auto-run). **Always allow**
-  records a reusable pin: a family signature for a provably read-only command, and, for a
-  command whose program the user vouches for and `SafeCommands` deems safe (such as `mvn` or
-  a `mvnw` or `gradlew` wrapper), a trusted family key, so later variations run without a
-  prompt. A chain, redirect or payload tool is never family-trusted and is trusted exactly
-  as approved
-- a file tree follows the selected project, colors each file by its git state (green
-  changed, blue untracked, red deleted), opens a colored git patch on double-click, and
-  refreshes itself when files change on disk
-- **Paste** (ctrl+V) stages the picture on the clipboard and the normal **Send** carries it
-  as an OpenAI image part, for a model that handles images
-- UI text in English, Dutch, French or German, switchable at runtime, English by default
+  records a reusable pin: a family signature for a provably read-only command and, for a
+  command whose program you vouch for and `SafeCommands` deems safe (a `mvn`/`mvnw`/`gradlew`
+  build), a trusted family key, so later variations run without a prompt. Writers and exec
+  trampolines (`tee`, `xargs`, `env`, `install`, `patch`, ...) are never family-trusted and
+  fall back to a verbatim pin, so one Always on a benign run cannot become an unattended
+  out-of-folder write or an arbitrary exec
+- **MCP client** over stdio: opt a server in and its tools join the registry next to the
+  built-ins; each call is approval-gated, with a per-server always-allow and a per-server
+  timeout so a slow local server (such as an image model) is not cut off. This is how image
+  generation and editing run
+- images are supported, with limits: **Paste** (ctrl+V) carries a clipboard picture as an
+  OpenAI image part for a vision model, and a picture a *tool* returns shows inline in the
+  transcript with a **Save** strip that writes the original bytes where you choose
+- a file tree follows the selected project, colors each file by its git state (green changed,
+  blue untracked, red deleted), opens a colored git patch on double-click, and refreshes
+  itself when files change on disk
+- a **local-model note** keeps a quiet line reminding that a local model can be wrong, shown
+  by default
+- UI text in English, Dutch, French or German, switchable at runtime, English by default, with
+  a settings/help panel documenting the options
 
 Not there yet:
 
-- no in-app editor: edits happen through the model, not a text buffer
-- git is read-only inspection — no commit, no checkpoints
-- attached images are first-pass only: the picture rides the first model request of a turn and
-  is not kept in the stored transcript, so it is not replayed on a steer follow-up or a reload
-- the GraalVM `native-image` profile is not wired up
+- no in-app text editor: edits happen through the model, not a text buffer you type into
+- **concurrent conversations**: a single turn already fans its tool calls out in parallel (see
+  above); what is not wired up yet is two *separate* conversations streaming at the same time -
+  every turn still shares one live session, so a second is held until the first finishes. The
+  turn claim is already a counter, so raising this to "several sessions at once" on a powerful
+  Studio is a deliberate follow-up (per-turn session isolation), not a rewrite
+- MCP transport is **stdio only**; HTTP/SSE servers, and a Baudet-side MCP *server*, are not
+  built
+- pasted input images are first-pass: the picture rides the first request of a turn and is not
+  replayed on a steer follow-up or a reload
+- the **GraalVM `native-image`** build is not wired up: the app ships as a packaged `.jar`, not
+  a native binary (native-toolkit spikes live on separate branches)
 
 ## Stack
 
