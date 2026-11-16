@@ -3,7 +3,7 @@ title Decision routes of one turn (AppState.send)
 skinparam shadowing false
 start
 :send(userText);
-if (turnLock CAS from false to true ?) then (no)
+if (tryClaimTurn() claims one of turnCapacity() slots ?) then (no)
   :throw IllegalStateException: a turn is already running;
   stop
 else (yes)
@@ -11,7 +11,7 @@ endif
 :new CancellationToken, activeToken = token, messages += user;
 if (contextGuard() says too large (StopAtLimit only) ?) then (too large)
   :ContextTooLong: nothing sent, the typed text is kept;
-  :finally: activeToken = null, turnLock = false;
+  :finally: activeToken = null, releaseTurn();
   stop
 else (ok)
 endif
@@ -31,6 +31,6 @@ repeat
   endif
 repeat while (attempt under 2 ?) is (yes)
 :failure: drop the prompt if nothing was appended,\nelse keep the actions and reset previousResponseId;
-:finally: activeToken = null, turnLock = false;
+:finally: activeToken = null, releaseTurn();
 stop
 @enduml

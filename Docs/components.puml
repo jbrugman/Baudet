@@ -13,7 +13,7 @@ package "UI layer (Swing, EDT)" {
 }
 
 package "Orchestrator (blocking; worker thread)" {
-  component "AppState\nturnLock, activeToken\nsend / compact / cancelTurn\ngates + ceilings" as STATE
+  component "AppState\nactiveTurns, activeToken\nsend / compact / cancelTurn\ngates + ceilings" as STATE
 }
 
 package "API layer" {
