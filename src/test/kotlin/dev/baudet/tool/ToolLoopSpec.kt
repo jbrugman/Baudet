@@ -323,4 +323,26 @@ class ToolLoopSpec : BehaviorSpec({
             }
         }
     }
+
+    /**
+     * A tool observation goes to the model channel bounded, so one giant diff or grep cannot bloat
+     * every later turn nor exceed what one summarization call carries and strand compaction. The
+     * full output still lands in the transcript row through the sink path, which [capModelText]
+     * never touches. These pin that the model-facing text is capped and that a small one is left
+     * exactly as the tool wrote it.
+     */
+    given("a tool observation larger than the ceiling one turn may carry") {
+        `when`("capping it for the model channel") {
+            then("the model sees a head and a tail around a truncation marker, not the whole") {
+                val capped = capModelText("x".repeat(40_000), 1_000)
+                (capped.length <= 1_016) shouldBe true
+                capped.contains("output truncated") shouldBe true
+                capped.startsWith("xxx") shouldBe true
+                capped.endsWith("xxx") shouldBe true
+            }
+            then("an observation under the ceiling passes through byte for byte") {
+                capModelText("short output", 1_000) shouldBe "short output"
+            }
+        }
+    }
 })

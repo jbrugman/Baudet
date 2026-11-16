@@ -165,10 +165,10 @@ class CompactorSpec : BehaviorSpec({
 
     /**
      * The ceiling is what keeps a fold from losing text. A turn bigger than one summarization call
-     * can only reach the model in pieces, and a piece it never read must never be cleared behind a
-     * summary -- that is the silent loss this whole path exists to prevent. The fold stops at such
-     * a turn and keeps it verbatim. These flow tests drive that decision through the real compact()
-     * with an injected fake summarizer, so the guard is pinned end to end and not only in the plan.
+     * reaches the model in pieces across consecutive calls, and it is cleared only once every piece
+     * the model actually read came back accepted -- an unread piece is the silent loss this whole
+     * path exists to prevent. These flow tests drive that decision through the real compact() with
+     * an injected fake summarizer, so the lossless rule is pinned end to end, not only in the plan.
      */
     given("a session whose only turn is larger than one call can carry") {
         val huge = Msg("tool", "O".repeat(60_000))
@@ -183,13 +183,19 @@ class CompactorSpec : BehaviorSpec({
         )
         `when`("compacting with nothing kept verbatim") {
             val result = compactor.compact(state, keepLast = 0) {}
-            then("nothing folds and the oversized turn survives untouched") {
-                result shouldBe CompactionOutcome.OversizedTurn(48_000)
-                state.messages.size shouldBe 1
-                state.messages[0].content shouldBe huge.content
+            then("the oversized turn folds across consecutive calls instead of stranding the fold") {
+                result shouldBe CompactionOutcome.Compacted("a summary")
+                (seen.size > 1) shouldBe true
             }
-            then("the summarizer is never called, because the guard stops before any cut") {
-                seen shouldBe emptyList()
+            then("every character reaches the model across the calls, so nothing is cleared unread") {
+                // The summarizer is faked, but the model must still have seen the whole turn. The
+                // letter 'O' appears nowhere in the wrapper, the role ("tool") or the fake summary,
+                // so its total across every call is exactly the characters of content handed over.
+                seen.sumOf { s -> s.count { c -> c == 'O' } } shouldBe 60_000
+            }
+            then("the turn is cleared only after its last slice, replaced by the summary") {
+                state.messages.size shouldBe 0
+                state.summary shouldBe "a summary"
             }
         }
     }
@@ -212,19 +218,21 @@ class CompactorSpec : BehaviorSpec({
         )
         `when`("compacting and keeping the last two turns") {
             val result = compactor.compact(state, keepLast = 2) {}
-            then("the foldable prefix is summarized once, whole, never cut") {
-                seen.size shouldBe 1
+            then("the foldable prefix goes first, whole, in its own call, never cut") {
                 seen[0].contains("first question") shouldBe true
                 seen[0].contains("first answer") shouldBe true
-                seen[0].contains("cut here") shouldBe false
+                seen[0].count { c -> c == 'O' } shouldBe 0
             }
-            then("only the folded turns are cleared and the oversized turn is kept in full") {
+            then("the oversized turn then folds across further calls rather than held hostage") {
+                (seen.size > 1) shouldBe true
+                seen.sumOf { s -> s.count { c -> c == 'O' } } shouldBe 60_000
+            }
+            then("prefix and oversized turn clear once read; the kept tail and summary remain") {
                 result shouldBe CompactionOutcome.Compacted("the summary")
                 state.summary shouldBe "the summary"
-                state.messages.size shouldBe 3
-                state.messages[0].content shouldBe huge.content
-                state.messages[1].content shouldBe "keep one"
-                state.messages[2].content shouldBe "keep two"
+                state.messages.size shouldBe 2
+                state.messages[0].content shouldBe "keep one"
+                state.messages[1].content shouldBe "keep two"
             }
         }
     }

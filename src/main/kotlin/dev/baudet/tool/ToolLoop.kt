@@ -44,6 +44,37 @@ private const val MAX_PARALLEL_TOOL_CALLS = 2
 private const val MAX_BLANK_TURNS = 2
 
 /**
+ * Ceiling on the text one tool observation may put on the model channel, in characters. The full
+ * output always stays in the transcript row -- the sink path that renders the card is untouched --
+ * and only what the model is shown is bounded. A large diff or grep replayed on every later turn
+ * otherwise (a) bloats the whole history, which is what makes a long session crawl, and (b) can
+ * exceed the characters one summarization call carries, which used to strand compaction outright.
+ * Kept head-biased so the model still reads how the call began; the human reads everything in the
+ * card. It sits under the 48k a fold carries by default, so a normal model never strands on one.
+ */
+private const val MAX_OBSERVATION_CHARS = 32_000
+
+/**
+ * Bound [text] to about [maxChars] by keeping its first three fifths and its last two fifths around
+ * an in-place truncation marker. Model-facing, so English. Under the ceiling it returns [text]
+ * as-is; the finished string never exceeds [maxChars] by more than the marker's digits, so a
+ * caller's own guard on that ceiling still holds.
+ */
+internal fun capModelText(text: String, maxChars: Int): String {
+    if (maxChars <= 0 || text.length <= maxChars) return text
+    // A fixed-shape skeleton reserves the marker's room, so head + marker + tail stays under the
+    // ceiling; the real marker only swaps the zero-pads for actual figures of no greater width.
+    val skeleton = "\n\n[... output truncated: keeping the first 0000 and last 0000 of 000000" +
+        " characters; the full output stays in the transcript ...]\n\n"
+    val budget = (maxChars - skeleton.length).coerceAtLeast(0)
+    val head = budget * 3 / 5
+    val tail = budget - head
+    val marker = "\n\n[... output truncated: keeping the first $head and last $tail of ${text.length}" +
+        " characters; the full output stays in the transcript ...]\n\n"
+    return text.substring(0, head) + marker + text.substring(text.length - tail)
+}
+
+/**
  * A short in-flight instruction appended to the working conversation when the model parks a turn
  * blank, so the next request differs from the one that just returned nothing. A deterministic local
  * model replays identical messages into an identical blank reply -- the old bare retry changed
@@ -340,7 +371,7 @@ class ToolLoop(
      * self-correct: a failed call that does not say "do not repeat this" invites a model
      * to retry the identical wrong call, and the loop bounds the count but not the loop.
      */
-    private fun observation(call: ToolCall, result: ToolResult): String = buildString {
+    private fun observation(call: ToolCall, result: ToolResult): String = capModelText(buildString {
         append("Tool observation")
         call.callId?.let { append(" for call ").append(it) }
         append(": `").append(call.tool).append("` ")
@@ -348,5 +379,5 @@ class ToolLoop(
         append(result.output)
         if (!result.ok) append(" Do not send the same call again unchanged; correct it or answer.")
         result.diff?.let { append("\n").append(fenceChars).append("diff\n").append(it).append("\n").append(fenceChars) }
-    }
+    }, MAX_OBSERVATION_CHARS)
 }

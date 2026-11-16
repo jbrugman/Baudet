@@ -54,4 +54,18 @@ object CompactionPlan {
         }
         return older.subList(0, taken).toList() to older.subList(taken, older.size).toList()
     }
+
+    /**
+     * How many characters of a single message's content still fit one call once a carried
+     * [summaryChars] summary and a message of [role] length have taken their share of [maxChars].
+     * It charges exactly what [foldBatch] charges a turn -- the [SUMMARY_HEADER_OVERHEAD] wrapper
+     * around a carried summary, plus the "role: " prefix and the trailing blank line -- so the
+     * [dev.baudet.session.Compactor] can pour one oversized turn into consecutive slices that each
+     * land inside the very ceiling they are summarized against. Returns 0 when nothing fits, which
+     * the caller reads as "stop here" rather than as license to send an empty slice.
+     */
+    fun contentRoom(summaryChars: Int, role: Int, maxChars: Int): Int {
+        val reserved = if (summaryChars > 0) summaryChars + SUMMARY_HEADER_OVERHEAD else 0
+        return (maxChars - reserved - role - 4).coerceAtLeast(0)
+    }
 }
