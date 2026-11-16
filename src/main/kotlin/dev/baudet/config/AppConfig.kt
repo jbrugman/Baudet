@@ -28,6 +28,13 @@ data class AppConfig(
      * per machine, and it rides in the single-row JSON blob, so toggling it touches no schema.
      */
     var transcriptWrap: Boolean = true,
+    /**
+     * Whether the chat keeps a quiet line at the bottom reminding that a local model can be wrong.
+     * The reminder is the honest side of a Codex-style look: the model runs here, not as a service,
+     * so it can be mistaken and there is no one behind it to catch that. On by default, per user,
+     * per machine, and it rides in the single-row JSON blob, so toggling it touches no schema.
+     */
+    var honestyFooter: Boolean = true,
 
     /**
      * The ceiling on the reply a turn may produce. 0 -- the default -- omits the field so the

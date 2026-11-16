@@ -46,6 +46,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
     private val maxIterations = JTextField(6)
     private val maxParallelTurns = JTextField(6)
     private val transcriptWrap = JCheckBox(Texts[Key.TranscriptWrap])
+    private val honestyFooter = JCheckBox(Texts[Key.HonestyFooter])
     private val systemPrompt = JTextArea(5, 34).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -89,6 +90,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxIterations.toolTipText = Texts[Key.TipMaxIterations]
         maxParallelTurns.toolTipText = Texts[Key.TipMaxParallelTurns]
         transcriptWrap.toolTipText = Texts[Key.TipTranscriptWrap]
+        honestyFooter.toolTipText = Texts[Key.TipHonestyFooter]
         contextStrategy.addActionListener { updateEnabled() }
         toolMode.addActionListener { updateEnabled() }
         val form = formPanel(
@@ -114,6 +116,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
                 "" to autoApproveSafe,
                 "" to gitAllowWrites,
                 "" to transcriptWrap,
+                "" to honestyFooter,
                 // Wrapped, so the prompt scrolls inside its own 5 rows instead of asking the
                 // form for the height of every line it holds.
                 Texts[Key.SystemPromptLabel] to scrollingField(systemPrompt)
@@ -230,6 +233,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
         maxIterations.text = c.maxToolIterations.toString()
         maxParallelTurns.text = c.maxParallelTurns.toString()
         transcriptWrap.isSelected = c.transcriptWrap
+        honestyFooter.isSelected = c.honestyFooter
         status.foreground = Color(160, 160, 160)
         status.text = Texts.fmt(Key.LoadedFromDisk, AppState.dataDir().toAbsolutePath().toString())
         reloadCommandLists()
@@ -325,6 +329,7 @@ class SettingsPanel(private val state: AppState) : JPanel(BorderLayout()) {
             autoApproveSafeCommands = autoApproveSafe.isSelected,
             gitAllowWrites = gitAllowWrites.isSelected,
             transcriptWrap = transcriptWrap.isSelected,
+            honestyFooter = honestyFooter.isSelected,
             toolMode = tools,
             maxToolIterations = mi,
             maxParallelTurns = mpt,
