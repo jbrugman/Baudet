@@ -26,5 +26,13 @@ interface Tool {
      */
     val itemKind: ItemKind get() = ItemKind.ToolCall
 
+    /**
+     * Whether this call may run alongside its siblings in the same batch. A tool says yes only when
+     * the call both writes nothing and waits for no person, so a fan-out can never race a write or
+     * strand an approval. The default refuses, so a new tool stays serial until it proves itself
+     * side-effect-free; [ToolLoop] fans a batch out only when every call in it agrees.
+     */
+    fun canRunParallel(args: JsonObject, ctx: ToolContext): Boolean = false
+
     fun execute(args: JsonObject, ctx: ToolContext): ToolResult
 }

@@ -8,6 +8,9 @@ import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The loop is the orchestrator, so these drive it with a scripted model instead of
@@ -203,6 +206,69 @@ class ToolLoopSpec : BehaviorSpec({
             loop.run(seed("look at this"), ctx = ctx, image = "data:image/png;base64,AAA")
             then("the image rides only the first model request") {
                 source.images shouldBe listOf("data:image/png;base64,AAA", null)
+            }
+        }
+    }
+
+    given("a pure-read batch that every call agrees to fan out") {
+        // A barrier of two only clears when both runs are live at the same instant; a serial loop
+        // would time out on the first, so reaching it twice is the proof the batch really fanned out.
+        val barrier = CyclicBarrier(2)
+        fun readTool(nm: String, sleepMs: Long) = object : Tool {
+            override val name = nm
+            override val description = "reads"
+            override val parameters = buildJsonObject { put("type", "object") }
+            override fun canRunParallel(args: JsonObject, ctx: ToolContext) = true
+            override fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+                val met = try { barrier.await(2, TimeUnit.SECONDS); true } catch (_: Exception) { false }
+                Thread.sleep(sleepMs)
+                return ToolResult(ok = true, output = "$nm met=$met")
+            }
+        }
+        val reg = ToolRegistry(listOf(readTool("slow", 150), readTool("fast", 10)))
+        val two = "reads\n```baudet-tool\n[{\"tool\":\"slow\"},{\"tool\":\"fast\"}]\n```"
+        val source = Scripted(listOf(turn(two, "r1"), turn("done", "r2")))
+        val loop = ToolLoop(source, reg, extractor, maxIterations = 4)
+        `when`("running") {
+            val outcome = loop.run(seed("read both"), ctx = ctx)
+            then("both runs met the sibling, so the batch executed at once") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                outcome.steps[0].results.map { it.output.contains("met=true") } shouldBe listOf(true, true)
+            }
+            then("cards and observations still come back in call order despite fast ending first") {
+                outcome.steps[0].results.map { it.output.contains("slow") } shouldBe listOf(true, false)
+                outcome.messages[1].content.contains("slow") shouldBe true
+                outcome.messages[2].content.contains("fast") shouldBe true
+            }
+        }
+    }
+
+    given("a batch that mixes a fan-out-able call with a serial one") {
+        // One non-parallel call keeps the whole batch serial, so the live count must never exceed one.
+        val live = AtomicInteger(0)
+        val peak = AtomicInteger(0)
+        fun tracked(nm: String, parallel: Boolean) = object : Tool {
+            override val name = nm
+            override val description = "t"
+            override val parameters = buildJsonObject { put("type", "object") }
+            override fun canRunParallel(args: JsonObject, ctx: ToolContext) = parallel
+            override fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+                val now = live.incrementAndGet()
+                peak.updateAndGet { k -> if (now > k) now else k }
+                Thread.sleep(80)
+                live.decrementAndGet()
+                return ToolResult(ok = true, output = nm)
+            }
+        }
+        val reg = ToolRegistry(listOf(tracked("p", true), tracked("s", false)))
+        val two = "```baudet-tool\n[{\"tool\":\"p\"},{\"tool\":\"s\"}]\n```"
+        val source = Scripted(listOf(turn(two, "r1"), turn("done", "r2")))
+        val loop = ToolLoop(source, reg, extractor, maxIterations = 4)
+        `when`("running") {
+            val outcome = loop.run(seed("mixed"), ctx = ctx)
+            then("the mixed batch never ran two calls at once") {
+                (outcome is LoopOutcome.Completed) shouldBe true
+                peak.get() shouldBe 1
             }
         }
     }

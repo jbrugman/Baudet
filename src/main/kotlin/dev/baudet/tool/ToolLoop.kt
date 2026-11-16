@@ -27,6 +27,14 @@ import kotlinx.serialization.json.contentOrNull
  * then still sees each tool observation. [ToolRegistry.definitions] is offered to every
  * turn so the backend can answer with a native function_call.
  */
+/**
+ * Tool-calls runnable at once inside one fan-out batch. Two, because this app targets a local box: a
+ * couple of read-only calls overlap usefully, while a wider fleet only helps a hosted backend with
+ * elastic workers. This bounds tool-calls inside a single turn, not whole turns -- that separate
+ * bound is `AppState.MAX_SAFE_PARALLEL`.
+ */
+private const val MAX_PARALLEL_TOOL_CALLS = 2
+
 class ToolLoop(
     private val turnSource: TurnSource,
     private val registry: ToolRegistry,
@@ -109,17 +117,7 @@ class ToolLoop(
                 )
             }
 
-            val results = calls.map { call ->
-                // Opened before the run, not after it: a tool asks for approval from inside
-                // execute(), so a card raised afterwards reports a decision the reader already
-                // made, on a row they were not looking at yet.
-                announce(call, sink)
-                val result = runner.run(call, ctx)
-                report(call, result, sink)
-                result.undo?.let { undos.add(it) }
-                addObservation(msgs, added, call, result)
-                result
-            }
+            val results = runCalls(calls, ctx, msgs, added, undos, sink)
             steps.add(ToolStep(turn.text, calls, results))
             callSteps++
         }
@@ -144,6 +142,76 @@ class ToolLoop(
             )
         }
         return LoopOutcome.CapReached(prev, steps.toList(), added.toList(), undos.toList())
+    }
+
+    /**
+     * Run one batch of the model's calls. By default they run one at a time, exactly as before. A
+     * batch of more than one runs together only when every call is [Tool.canRunParallel] -- writes
+     * nothing and waits for no person, e.g. the several reads or greps a local model asks for at
+     * once -- and then the emitter is still driven only from this worker thread, in call order, so
+     * no pool thread touches its open-row bookkeeping. A mixed batch, or any call that writes or
+     * needs an approval, keeps the one-at-a-time path so an approval card still surfaces live.
+     */
+    private fun runCalls(
+        calls: List<ToolCall>,
+        ctx: ToolContext,
+        msgs: MutableList<Msg>,
+        added: MutableList<Msg>,
+        undos: MutableList<() -> Unit>,
+        sink: ItemSink
+    ): List<ToolResult> {
+        val parallel = calls.size > 1 &&
+            calls.all { registry.get(it.tool)?.canRunParallel(it.arguments, ctx) == true }
+        if (parallel) return runCallsInParallel(calls, ctx, msgs, added, undos, sink)
+        return calls.map { call ->
+            // Opened before the run, not after it: a tool asks for approval from inside
+            // execute(), so a card raised afterwards reports a decision the reader already
+            // made, on a row they were not looking at yet.
+            announce(call, sink)
+            val result = runner.run(call, ctx)
+            report(call, result, sink)
+            result.undo?.let { undos.add(it) }
+            addObservation(msgs, added, call, result)
+            result
+        }
+    }
+
+    /**
+     * Run a side-effect-free batch together, then emit in order. The bodies may finish out of order
+     * on the pool, but the cards and observations are rebuilt in the model's call order, so a fan-out
+     * is indistinguishable from a serial run to the reader and to the next turn. A body cannot throw
+     * -- [ToolRunner] turns every failure into a result -- but a null slot is still refused rather
+     * than guessed, so a result the pool did not produce is a clean miss, not a crash.
+     */
+    private fun runCallsInParallel(
+        calls: List<ToolCall>,
+        ctx: ToolContext,
+        msgs: MutableList<Msg>,
+        added: MutableList<Msg>,
+        undos: MutableList<() -> Unit>,
+        sink: ItemSink
+    ): List<ToolResult> {
+        val results = arrayOfNulls<ToolResult>(calls.size)
+        val done = java.util.concurrent.CountDownLatch(calls.size)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(MAX_PARALLEL_TOOL_CALLS, calls.size))
+        try {
+            calls.forEachIndexed { index, call ->
+                pool.execute {
+                    try { results[index] = runner.run(call, ctx) } finally { done.countDown() }
+                }
+            }
+            done.await()
+        } finally {
+            pool.shutdown()
+        }
+        return calls.mapIndexed { index, call ->
+            val result = results[index] ?: ToolResult(ok = false, output = "tool `${call.tool}` produced no result")
+            announce(call, sink)
+            report(call, result, sink)
+            result.undo?.let { undos.add(it) }
+            addObservation(msgs, added, call, result)
+            result
+        }
     }
 
     /**
